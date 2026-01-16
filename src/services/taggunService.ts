@@ -1,5 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 import FormData from 'form-data';
+import sharp from 'sharp';
 
 export interface TaggunResponse {
   emailAddress: string;
@@ -50,8 +51,33 @@ export class TaggunService {
 
   async processReceipt(imageBuffer: Buffer, filename: string): Promise<TaggunResponse> {
     try {
+      // Controlla la dimensione del file
+      const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+      let processBuffer = imageBuffer;
+
+      console.log(`📦 Dimensione file originale: ${(imageBuffer.length / 1024 / 1024).toFixed(2)}MB`);
+
+      if (imageBuffer.length > MAX_FILE_SIZE) {
+        console.log('⚠️  File supera 20MB, tentativo di ridimensionamento...');
+        
+        const extension = filename.toLowerCase().split('.').pop();
+        
+        // Se è un'immagine, prova a ridimensionarla
+        if (['jpg', 'jpeg', 'png'].includes(extension || '')) {
+          try {
+            processBuffer = await this.compressImage(imageBuffer, extension || 'jpeg');
+            console.log(`✅ Immagine ridimensionata: ${(processBuffer.length / 1024 / 1024).toFixed(2)}MB`);
+          } catch (compressionError) {
+            console.error('❌ Errore durante il ridimensionamento:', compressionError);
+            throw new Error('File troppo grande (>20MB) e impossibile ridimensionare l\'immagine');
+          }
+        } else {
+          throw new Error('File troppo grande (>20MB) e non è un\'immagine compressibile');
+        }
+      }
+
       const formData = new FormData();
-      formData.append('file', imageBuffer, {
+      formData.append('file', processBuffer, {
         filename: filename,
         contentType: this.getMimeType(filename),
       });
@@ -95,6 +121,33 @@ export class TaggunService {
       
       console.error('Errore imprevisto nel servizio Taggun:', error);
       throw new Error('Errore interno durante l\'elaborazione della ricevuta');
+    }
+  }
+
+  private async compressImage(imageBuffer: Buffer, format: string): Promise<Buffer> {
+    try {
+      let pipeline = sharp(imageBuffer);
+
+      // Ridimensiona l'immagine mantenendo l'aspect ratio
+      pipeline = pipeline.resize(2048, 2048, {
+        fit: 'inside',
+        withoutEnlargement: true,
+      });
+
+      // Comprimi in base al formato
+      if (format.toLowerCase() === 'png') {
+        return await pipeline
+          .png({ quality: 80, effort: 9 })
+          .toBuffer();
+      } else {
+        // JPEG
+        return await pipeline
+          .jpeg({ quality: 80, progressive: true })
+          .toBuffer();
+      }
+    } catch (error) {
+      console.error('Errore durante la compressione dell\'immagine:', error);
+      throw error;
     }
   }
 

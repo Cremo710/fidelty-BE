@@ -124,7 +124,7 @@ async function createServer(): Promise<FastifyInstance> {
   console.log('🔍 6.1 Registrazione plugin multipart...');
   await app.register(multipart, {
     limits: {
-      fileSize: 5 * 1024 * 1024, // 5MB limit
+      fileSize: 500 * 1024 * 1024, // 500MB limit (verrà compresso se > 20MB)
     },
   });
   console.log('✅ Plugin multipart registrato');
@@ -158,10 +158,38 @@ async function createServer(): Promise<FastifyInstance> {
         });
       }
 
-      const buffer = await data.toBuffer();
       const filename = data.filename || 'receipt.jpg';
+      const extension = filename.toLowerCase().split('.').pop();
+      const isCompressible = ['jpg', 'jpeg', 'png'].includes(extension || '');
+      const MAX_INITIAL_SIZE = 20 * 1024 * 1024; // 20MB
 
-      console.log(`📁 File ricevuto: ${filename} (${buffer.length} bytes)`);
+      // Leggi il file in chunks per controllare la dimensione
+      console.log('📖 Lettura file in progress...');
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
+
+      for await (const chunk of data.file) {
+        chunks.push(chunk);
+        totalSize += chunk.length;
+
+        // Se supera 20MB e non è compressibile, ferma subito
+        if (totalSize > MAX_INITIAL_SIZE && !isCompressible) {
+          throw new Error('File troppo grande (>20MB) e non è un\'immagine compressibile (JPG/PNG)');
+        }
+      }
+
+      let buffer = Buffer.concat(chunks);
+      console.log(`📦 Dimensione file originale: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+
+      // Se il file supera 20MB e è un'immagine, comprimilo
+      if (buffer.length > MAX_INITIAL_SIZE && isCompressible) {
+        console.log('⚠️  File supera 20MB, compressione in corso...');
+        const { taggunService: tgService } = await import('./services/taggunService.js');
+        buffer = await tgService['compressImage'](buffer, extension || 'jpeg');
+        console.log(`✅ Immagine compressa: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
+      }
+
+      console.log(`📁 File elaborato: ${filename} (${buffer.length} bytes)`);
 
       // Importa il servizio Taggun
       const { taggunService } = await import('./services/taggunService.js');
@@ -194,6 +222,30 @@ async function createServer(): Promise<FastifyInstance> {
         success: false,
         error: errorMessage,
         code: 'PROCESSING_ERROR'
+      });
+    }
+  });
+
+  // Receipt confirm endpoint
+  app.post('/api/receipts/confirm', async (request, reply) => {
+    try {
+      const data = request.body;
+      
+      console.log('📋 Ricevuta richiesta di conferma ricevuta');
+      console.log('Dati ricevuti:', data);
+
+      return reply.status(200).send({
+        status: 'OK'
+      });
+
+    } catch (error) {
+      console.error('❌ Errore durante la conferma della ricevuta:', error);
+      
+      const errorMessage = error instanceof Error ? error.message : 'Errore sconosciuto';
+      
+      return reply.status(500).send({
+        status: 'ERROR',
+        error: errorMessage
       });
     }
   });

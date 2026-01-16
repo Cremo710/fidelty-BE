@@ -21,7 +21,8 @@
     "@fastify/multipart": "^9.3.0",
     "axios": "^1.13.2",
     "dotenv": "^16.4.4",
-    "fastify": "^5.0.0"
+    "fastify": "^5.0.0",
+    "sharp": "^0.33.1"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",
