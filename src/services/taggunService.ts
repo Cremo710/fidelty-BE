@@ -167,11 +167,11 @@ export class TaggunService {
   }
 
   async validateImageFile(imageBuffer: Buffer, filename: string): Promise<void> {
-    const maxSize = 5 * 1024 * 1024; // 5MB
+    const maxSize = 20 * 1024 * 1024; // 20MB
     const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
     
     if (imageBuffer.length > maxSize) {
-      throw new Error('Dimensione file superiore a 5MB');
+      throw new Error('Dimensione file superiore a 20MB');
     }
     
     const mimeType = this.getMimeType(filename);
