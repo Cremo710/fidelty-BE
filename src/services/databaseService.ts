@@ -1,4 +1,4 @@
-import pkg from 'pg';
+import pkg from "pg";
 const { Pool } = pkg;
 
 export class DatabaseService {
@@ -6,9 +6,11 @@ export class DatabaseService {
 
   constructor() {
     const databaseUrl = process.env.DATABASE_URL;
-    
+
     if (!databaseUrl) {
-      throw new Error('DATABASE_URL non configurata nelle variabili d\'ambiente');
+      throw new Error(
+        "DATABASE_URL non configurata nelle variabili d'ambiente",
+      );
     }
 
     this.pool = new Pool({
@@ -18,7 +20,7 @@ export class DatabaseService {
       },
     });
 
-    console.log('🗄️  Pool di connessioni PostgreSQL inizializzato');
+    console.log("🗄️  Pool di connessioni PostgreSQL inizializzato");
   }
 
   async initializeTables(): Promise<void> {
@@ -66,135 +68,114 @@ export class DatabaseService {
         CREATE INDEX IF NOT EXISTS idx_receipts_doc_id ON receipts(doc_id);
         CREATE INDEX IF NOT EXISTS idx_receipts_created_at ON receipts(created_at);
       `);
-      console.log('✅ Tabelle del database inizializzate correttamente');
+      console.log("✅ Tabelle del database inizializzate correttamente");
     } catch (error) {
-      console.error('❌ Errore durante l\'inizializzazione delle tabelle:', error);
+      console.error(
+        "❌ Errore durante l'inizializzazione delle tabelle:",
+        error,
+      );
       throw error;
     }
   }
 
   async saveReceipt(receiptData: any): Promise<number> {
     const client = await this.pool.connect();
+
     try {
-      await client.query('BEGIN');
+      console.log(
+        `💾 Tentativo di salvataggio ricevuta docId: ${receiptData.billDocId}`,
+      );
+      await client.query("BEGIN");
 
-      const docId = receiptData.entities?.receiptNumber?.data || receiptData.receiptNumber;
-
+      const docId = receiptData.billDocId;
       if (!docId) {
-        throw new Error('Doc ID mancante nei dati della ricevuta');
+        throw new Error("Impossibile salvare: billDocId (Doc ID) mancante.");
       }
 
       const insertReceiptQuery = `
-        INSERT INTO receipts (
-          doc_id,
-          merchant_name,
-          merchant_address,
-          merchant_phone,
-          merchant_website,
-          merchant_tax_id,
-          merchant_category_code,
-          currency_code,
-          total_amount,
-          tax_amount,
-          tip_amount,
-          fee_amount,
-          discount_amount,
-          payment_method,
-          payment_method_details,
-          receipt_number,
-          purchase_date,
-          purchase_time,
-          email_address,
-          confidence,
-          processing_time,
-          line_items
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
-        ON CONFLICT (doc_id) DO UPDATE SET
-          updated_at = CURRENT_TIMESTAMP
-        RETURNING id
-      `;
+      INSERT INTO receipts (
+        doc_id,
+        merchant_name,
+        merchant_address,
+        merchant_tax_id,
+        total_amount,
+        purchase_date,
+        line_items,
+        updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+      ON CONFLICT (doc_id) DO UPDATE SET
+        merchant_name = EXCLUDED.merchant_name,
+        total_amount = EXCLUDED.total_amount,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id
+    `;
 
+      // Mapping dei tuoi dati verso le colonne del DB
       const receiptValues = [
-        docId,
-        receiptData.merchantName || null,
-        receiptData.merchantAddress || null,
-        receiptData.merchantPhone || null,
-        receiptData.merchantWebsite || null,
-        receiptData.merchantTaxId || null,
-        receiptData.merchantCategoryCode || null,
-        receiptData.currencyCode || null,
-        receiptData.totalAmount || null,
-        receiptData.taxAmount || null,
-        receiptData.tipAmount || null,
-        receiptData.feeAmount || null,
-        receiptData.discountAmount || null,
-        receiptData.paymentMethod || null,
-        receiptData.paymentMethodDetails || null,
-        receiptData.receiptNumber || null,
-        receiptData.purchaseDate || null,
-        receiptData.purchaseTime || null,
-        receiptData.emailAddress || null,
-        receiptData.confidence || null,
-        receiptData.processingTime || null,
-        JSON.stringify(receiptData.lineItems || []),
+        docId, // $1: doc_id
+        receiptData.merchantName || "Sconosciuto", // $2: merchant_name
+        receiptData.merchantAddress || null, // $3: merchant_address
+        receiptData.pIva || null, // $4: merchant_tax_id (pIva)
+        receiptData.billAmount || 0, // $5: total_amount
+        receiptData.billDate || null, // $6: purchase_date
+        JSON.stringify(receiptData.lineItems || []), // $7: line_items (come stringa JSON)
       ];
 
-      const receiptResult = await client.query(insertReceiptQuery, receiptValues);
+      const receiptResult = await client.query(
+        insertReceiptQuery,
+        receiptValues,
+      );
       const receiptId = receiptResult.rows[0].id;
 
-      // Salva i line items se presenti
+      // Gestione Line Items (se presenti nel tuo oggetto)
       if (receiptData.lineItems && Array.isArray(receiptData.lineItems)) {
         for (const item of receiptData.lineItems) {
           const insertItemQuery = `
-            INSERT INTO receipt_items (
-              receipt_id,
-              description,
-              quantity,
-              unit_price,
-              total_amount,
-              confidence
-            ) VALUES ($1, $2, $3, $4, $5, $6)
-          `;
-
-          const itemValues = [
+          INSERT INTO receipt_items (
+            receipt_id, description, quantity, total_amount
+          ) VALUES ($1, $2, $3, $4)
+        `;
+          await client.query(insertItemQuery, [
             receiptId,
-            item.description || null,
-            item.quantity || null,
-            item.unitPrice || null,
-            item.totalAmount || null,
-            item.confidence || null,
-          ];
-
-          await client.query(insertItemQuery, itemValues);
+            item.description || "Articolo",
+            item.quantity || 1,
+            item.totalAmount || 0,
+          ]);
         }
       }
 
-      await client.query('COMMIT');
-      console.log(`✅ Ricevuta salvata nel database con ID: ${receiptId}`);
+      await client.query("COMMIT");
+      console.log(
+        `✅ Ricevuta ${docId} salvata correttamente con ID interno: ${receiptId}`,
+      );
       return receiptId;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      console.error('❌ Errore durante il salvataggio della ricevuta:', error);
+    } catch (error: any) {
+      await client.query("ROLLBACK");
+      console.error(
+        "❌ Errore durante il salvataggio della ricevuta:",
+        error.message,
+      );
       throw error;
     } finally {
+      // IMPORTANTE: Rilascia sempre il client al pool
       client.release();
     }
   }
 
   async getReceipt(docId: string): Promise<any> {
     try {
-      const query = 'SELECT * FROM receipts WHERE doc_id = $1';
+      const query = "SELECT * FROM receipts WHERE doc_id = $1";
       const result = await this.pool.query(query, [docId]);
       return result.rows[0] || null;
     } catch (error) {
-      console.error('❌ Errore durante il recupero della ricevuta:', error);
+      console.error("❌ Errore durante il recupero della ricevuta:", error);
       throw error;
     }
   }
 
   async closePool(): Promise<void> {
     await this.pool.end();
-    console.log('🗄️  Pool di connessioni PostgreSQL chiuso');
+    console.log("🗄️  Pool di connessioni PostgreSQL chiuso");
   }
 }
 
