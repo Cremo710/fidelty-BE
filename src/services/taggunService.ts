@@ -110,8 +110,6 @@ export class TaggunService {
         }
       );
 
-      // console.log("Ricevuta: ", response.data);
-
       // Estrazione DOC ID dal campo text.text
       const textField = (response.data as any)?.text?.text;
       const docIdRegex = /(?:DOCUMENTO N\.|DOC\.|DOC N\.)\s*(\d{4}-\d{4})/i;
