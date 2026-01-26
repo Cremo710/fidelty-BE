@@ -110,18 +110,43 @@ export class TaggunService {
         }
       );
 
-      // Validazione DOC ID
-      const docIdRegex = /DOC\.{0,12}?(\d{4}-\d{4})/i;
+      // console.log("Ricevuta: ", response.data);
+
+      // Estrazione DOC ID dal campo text.text
       const textField = (response.data as any)?.text?.text;
+      const docIdRegex = /(?:DOCUMENTO N\.|DOC\.|DOC N\.)\s*(\d{4}-\d{4})/i;
       
-      if (!textField || !docIdRegex.test(textField)) {
-        console.error('❌ DOC ID non trovato nella response:', textField);
+      if (!textField) {
+        console.error('❌ Campo text.text non trovato nella response');
         throw new TaggunApiError(
           'Impossibile estrarre il Doc ID',
           500,
           'DOC_ID_ERR'
         );
       }
+
+      const docIdMatch = textField.match(docIdRegex);
+      
+      if (!docIdMatch || !docIdMatch[1]) {
+        console.error('❌ DOC ID non trovato nel testo:', textField);
+        throw new TaggunApiError(
+          'Impossibile estrarre il Doc ID',
+          500,
+          'DOC_ID_ERR'
+        );
+      }
+
+      const docId = docIdMatch[1];
+      console.log(`✅ DOC ID estratto: ${docId}`);
+
+      // Inserisci il DOC ID nel campo entities.receiptNumber.data
+      if (!(response.data as any)?.entities) {
+        (response.data as any).entities = {};
+      }
+      if (!(response.data as any)?.entities.receiptNumber) {
+        (response.data as any).entities.receiptNumber = {};
+      }
+      (response.data as any).entities.receiptNumber.data = docId;
 
       return response.data;
     } catch (error) {
