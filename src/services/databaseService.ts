@@ -26,49 +26,25 @@ export class DatabaseService {
   async initializeTables(): Promise<void> {
     try {
       await this.pool.query(`
-        CREATE TABLE IF NOT EXISTS receipts (
-          id SERIAL PRIMARY KEY,
-          doc_id VARCHAR(9) UNIQUE NOT NULL,
-          merchant_name VARCHAR(255),
-          merchant_address TEXT,
-          merchant_phone VARCHAR(20),
-          merchant_website VARCHAR(255),
-          merchant_tax_id VARCHAR(50),
-          merchant_category_code INT,
-          currency_code VARCHAR(3),
-          total_amount DECIMAL(10, 2),
-          tax_amount DECIMAL(10, 2),
-          tip_amount DECIMAL(10, 2),
-          fee_amount DECIMAL(10, 2),
-          discount_amount DECIMAL(10, 2),
-          payment_method VARCHAR(100),
-          payment_method_details VARCHAR(255),
-          receipt_number VARCHAR(50),
-          purchase_date DATE,
-          purchase_time TIME,
-          email_address VARCHAR(255),
-          confidence DECIMAL(5, 2),
-          processing_time INT,
-          line_items JSONB,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+      -- Tabella principale delle ricevute
+      CREATE TABLE IF NOT EXISTS receipts (
+        id SERIAL PRIMARY KEY,
+        doc_id VARCHAR(50) UNIQUE NOT NULL, -- Corrisponde a billDocId
+        merchant_name VARCHAR(255),
+        merchant_address TEXT,
+        merchant_tax_id VARCHAR(50),        -- Corrisponde a pIva
+        total_amount DECIMAL(12, 2),        -- Corrisponde a billAmount
+        purchase_date TIMESTAMP,            -- Corrisponde a billDate (ISO string)
+        line_items JSONB,                   -- Per salvare eventuali dettagli extra
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-        CREATE TABLE IF NOT EXISTS receipt_items (
-          id SERIAL PRIMARY KEY,
-          receipt_id INT NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
-          description VARCHAR(255),
-          quantity DECIMAL(10, 2),
-          unit_price DECIMAL(10, 2),
-          total_amount DECIMAL(10, 2),
-          confidence DECIMAL(5, 2),
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_receipts_doc_id ON receipts(doc_id);
-        CREATE INDEX IF NOT EXISTS idx_receipts_created_at ON receipts(created_at);
-      `);
-      console.log("✅ Tabelle del database inizializzate correttamente");
+      -- Indici per velocizzare le ricerche
+      CREATE INDEX IF NOT EXISTS idx_receipts_doc_id ON receipts(doc_id);
+      CREATE INDEX IF NOT EXISTS idx_receipts_merchant_tax_id ON receipts(merchant_tax_id);
+    `);
+      console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
       console.error(
         "❌ Errore durante l'inizializzazione delle tabelle:",
