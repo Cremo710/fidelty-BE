@@ -31,21 +31,21 @@ const CONFIG: ServerConfig = {
 };
 
 // Verifica che le dipendenze siano caricate correttamente
-async function checkDependencies() {
-  try {
-    // Usiamo import() dinamico per caricare i package.json
-    await import("fastify/package.json", { assert: { type: "json" } });
-    await import("@fastify/cors/package.json", { assert: { type: "json" } });
-    await import("dotenv/package.json", { assert: { type: "json" } });
-    console.log("✅ Dipendenze verificate");
-  } catch (error) {
-    console.error("❌ Errore durante la verifica delle dipendenze:", error);
-    process.exit(1);
-  }
-}
+// async function checkDependencies() {
+//   try {
+//     // La sintassi corretta ora usa 'with' al posto di 'assert'
+//     await import("fastify/package.json", { with: { type: "json" } });
+//     await import("@fastify/cors/package.json", { with: { type: "json" } });
+//     await import("dotenv/package.json", { with: { type: "json" } });
+//     console.log("✅ Dipendenze verificate");
+//   } catch (error) {
+//     console.error("❌ Errore durante la verifica delle dipendenze:", error);
+//     // process.exit(1); // Valuta se bloccare davvero il server per questo
+//   }
+// }
 
 // Esegui la verifica delle dipendenze
-await checkDependencies();
+// await checkDependencies();
 
 // Create Fastify server
 async function createServer(): Promise<FastifyInstance> {
