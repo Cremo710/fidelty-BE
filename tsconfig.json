@@ -13,14 +13,10 @@
     "sourceMap": true,
     "declaration": true,
     "lib": ["ES2022"],
-    "types": ["node"],
+    // "types": ["node"],  <-- CANCELLA QUESTA RIGA o commentala
     "allowSyntheticDefaultImports": true,
     "allowJs": true,
-    "checkJs": true
-  },
-  "ts-node": {
-    "esm": true,
-    "experimentalSpecifierResolution": "node"
+    "checkJs": false // Meglio false se hai file JS misti per evitare errori banali
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
