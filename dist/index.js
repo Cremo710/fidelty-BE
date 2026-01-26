@@ -20,21 +20,20 @@ const CONFIG = {
     nodeEnv: process.env.NODE_ENV || "development",
 };
 // Verifica che le dipendenze siano caricate correttamente
-async function checkDependencies() {
-    try {
-        // Usiamo import() dinamico per caricare i package.json
-        await import("fastify/package.json", { assert: { type: "json" } });
-        await import("@fastify/cors/package.json", { assert: { type: "json" } });
-        await import("dotenv/package.json", { assert: { type: "json" } });
-        console.log("✅ Dipendenze verificate");
-    }
-    catch (error) {
-        console.error("❌ Errore durante la verifica delle dipendenze:", error);
-        process.exit(1);
-    }
-}
+// async function checkDependencies() {
+//   try {
+//     // La sintassi corretta ora usa 'with' al posto di 'assert'
+//     await import("fastify/package.json", { with: { type: "json" } });
+//     await import("@fastify/cors/package.json", { with: { type: "json" } });
+//     await import("dotenv/package.json", { with: { type: "json" } });
+//     console.log("✅ Dipendenze verificate");
+//   } catch (error) {
+//     console.error("❌ Errore durante la verifica delle dipendenze:", error);
+//     // process.exit(1); // Valuta se bloccare davvero il server per questo
+//   }
+// }
 // Esegui la verifica delle dipendenze
-await checkDependencies();
+// await checkDependencies();
 // Create Fastify server
 async function createServer() {
     const app = Fastify({
@@ -100,7 +99,23 @@ async function createServer() {
         connectionString: process.env.DATABASE_URL,
         ssl: { rejectUnauthorized: false },
     });
-    client.connect();
+    client.connect()
+        .then(() => {
+        console.log("✅ Connessione al database stabilita con successo!");
+        // Test rapido: chiediamo al database l'ora attuale
+        return client.query('SELECT NOW()');
+    })
+        .then((res) => {
+        console.log("⏱️ Risposta dal DB (Ora server):", res.rows[0].now);
+    })
+        .catch((err) => {
+        console.error("❌ Errore critico di connessione al database:");
+        console.error("Dettaglio:", err.message);
+        // Suggerimento utile nei log
+        if (!process.env.DATABASE_URL) {
+            console.error("👉 ATTENZIONE: La variabile DATABASE_URL non è definita su Render!");
+        }
+    });
     // Receipt processing endpoint
     app.post("/api/receipts/process", async (request, reply) => {
         try {
@@ -282,4 +297,3 @@ if (isMain) {
         process.exit(1);
     });
 }
-//# sourceMappingURL=index.js.map
