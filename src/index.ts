@@ -2,7 +2,8 @@
 console.log('🔍 1. Inizio esecuzione script');
 
 console.log('🔍 1.1 Prima di importare Fastify');
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify from 'fastify';
+import type { FastifyInstance } from 'fastify';
 console.log('✅ Fastify importato');
 
 console.log('🔍 1.2 Prima di importare CORS');
