@@ -122,7 +122,25 @@ async function createServer(): Promise<FastifyInstance> {
     ssl: { rejectUnauthorized: false },
   });
 
-  client.connect();
+  client.connect()
+  .then(() => {
+    console.log("✅ Connessione al database stabilita con successo!");
+    
+    // Test rapido: chiediamo al database l'ora attuale
+    return client.query('SELECT NOW()');
+  })
+  .then((res: any) => {
+    console.log("⏱️ Risposta dal DB (Ora server):", res.rows[0].now);
+  })
+  .catch((err: any) => {
+    console.error("❌ Errore critico di connessione al database:");
+    console.error("Dettaglio:", err.message);
+    
+    // Suggerimento utile nei log
+    if (!process.env.DATABASE_URL) {
+      console.error("👉 ATTENZIONE: La variabile DATABASE_URL non è definita su Render!");
+    }
+  });
 
   // Receipt processing endpoint
   app.post("/api/receipts/process", async (request, reply) => {
