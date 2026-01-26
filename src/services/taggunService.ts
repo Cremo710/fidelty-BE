@@ -2,6 +2,18 @@ import axios, { AxiosResponse } from 'axios';
 import FormData from 'form-data';
 import sharp from 'sharp';
 
+export class TaggunApiError extends Error {
+  public statusCode: number;
+  public errorCode: string;
+
+  constructor(message: string, statusCode: number = 500, errorCode: string = 'UNKNOWN_ERROR') {
+    super(message);
+    this.name = 'TaggunApiError';
+    this.statusCode = statusCode;
+    this.errorCode = errorCode;
+  }
+}
+
 export interface TaggunResponse {
   emailAddress: string;
   merchantName: string;
@@ -97,6 +109,19 @@ export class TaggunService {
           timeout: 30000,
         }
       );
+
+      // Validazione DOC ID
+      const docIdRegex = /DOC\.{0,12}?(\d{4}-\d{4})/i;
+      const textField = (response.data as any)?.text?.text;
+      
+      if (!textField || !docIdRegex.test(textField)) {
+        console.error('❌ DOC ID non trovato nella response:', textField);
+        throw new TaggunApiError(
+          'Impossibile estrarre il Doc ID',
+          500,
+          'DOC_ID_ERR'
+        );
+      }
 
       return response.data;
     } catch (error) {
