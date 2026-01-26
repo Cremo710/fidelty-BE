@@ -178,14 +178,14 @@ async function createServer(): Promise<FastifyInstance> {
         }
       }
 
-      let buffer = Buffer.concat(chunks);
+      let buffer = Buffer.concat(chunks) as Buffer<ArrayBuffer>;
       console.log(`📦 Dimensione file originale: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
 
       // Se il file supera 20MB e è un'immagine, comprimilo
       if (buffer.length > MAX_INITIAL_SIZE && isCompressible) {
         console.log('⚠️  File supera 20MB, compressione in corso...');
         const { taggunService: tgService } = await import('./services/taggunService.js');
-        buffer = await tgService['compressImage'](buffer, extension || 'jpeg');
+        buffer = (await tgService['compressImage'](buffer, extension || 'jpeg')) as Buffer<ArrayBuffer>;
         console.log(`✅ Immagine compressa: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
       }
 

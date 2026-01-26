@@ -112,7 +112,7 @@ export class TaggunService {
           throw new Error('Limite di richieste superato: riprovare più tardi');
         } else if (statusCode === 413) {
           throw new Error('File troppo grande: dimensione massima consentita 5MB');
-        } else if (statusCode >= 500) {
+        } else if (statusCode && statusCode >= 500) {
           throw new Error('Errore del server Taggun: riprovare più tardi');
         } else {
           throw new Error(`Errore elaborazione ricevuta: ${errorMessage}`);
