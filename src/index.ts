@@ -369,7 +369,9 @@ export { createServer, startServer, CONFIG };
 // e non quando viene importato come modulo
 const isMain =
   import.meta.url.endsWith("index.ts") ||
-  (process.argv[1] && process.argv[1].endsWith("index.ts"));
+  (process.argv[1] && process.argv[1].endsWith("index.ts")) ||
+  import.meta.url.endsWith("index.js") ||
+  (process.argv[1] && process.argv[1].endsWith("index.js"));
 
 if (isMain) {
   console.log("🚀 Avvio del server...");
