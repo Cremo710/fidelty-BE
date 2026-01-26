@@ -232,7 +232,7 @@ async function createServer(): Promise<FastifyInstance> {
 
       return reply.status(200).send({
         status: "OK",
-        receiptId: receiptId,
+        // receiptId: receiptId,
         message: "Ricevuta salvata con successo",
       });
     } catch (error) {
