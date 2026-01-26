@@ -250,11 +250,11 @@ async function createServer(): Promise<FastifyInstance> {
       console.log("Dati ricevuti:", data);
 
       // Salva i dati della ricevuta nel database
-      // const receiptId = await databaseService.saveReceipt(data);
+      const receiptId = await databaseService.saveReceipt(data);
 
       return reply.status(200).send({
         status: "OK",
-        // receiptId: receiptId,
+        receiptId: receiptId,
         message: "Ricevuta salvata con successo",
       });
     } catch (error) {
