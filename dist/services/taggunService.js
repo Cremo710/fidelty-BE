@@ -1,6 +1,16 @@
 import axios from 'axios';
 import FormData from 'form-data';
 import sharp from 'sharp';
+export class TaggunApiError extends Error {
+    statusCode;
+    errorCode;
+    constructor(message, statusCode = 500, errorCode = 'UNKNOWN_ERROR') {
+        super(message);
+        this.name = 'TaggunApiError';
+        this.statusCode = statusCode;
+        this.errorCode = errorCode;
+    }
+}
 export class TaggunService {
     apiKey;
     apiUrl;
@@ -53,6 +63,28 @@ export class TaggunService {
                 },
                 timeout: 30000,
             });
+            // Estrazione DOC ID dal campo text.text
+            const textField = response.data?.text?.text;
+            const docIdRegex = /(?:DOCUMENTO N\.|DOC\.|DOC N\.)\s*(\d{4}-\d{4})/i;
+            if (!textField) {
+                console.error('❌ Campo text.text non trovato nella response');
+                throw new TaggunApiError('Impossibile estrarre il Doc ID', 500, 'DOC_ID_ERR');
+            }
+            const docIdMatch = textField.match(docIdRegex);
+            if (!docIdMatch || !docIdMatch[1]) {
+                console.error('❌ DOC ID non trovato nel testo:', textField);
+                throw new TaggunApiError('Impossibile estrarre il Doc ID', 500, 'DOC_ID_ERR');
+            }
+            const docId = docIdMatch[1];
+            console.log(`✅ DOC ID estratto: ${docId}`);
+            // Inserisci il DOC ID nel campo entities.receiptNumber.data
+            if (!response.data?.entities) {
+                response.data.entities = {};
+            }
+            if (!response.data?.entities.receiptNumber) {
+                response.data.entities.receiptNumber = {};
+            }
+            response.data.entities.receiptNumber.data = docId;
             return response.data;
         }
         catch (error) {

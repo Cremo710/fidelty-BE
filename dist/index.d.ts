@@ -1,8 +1,9 @@
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify from "fastify";
+import type { FastifyInstance } from "fastify";
 type ServerConfig = {
     port: number;
     host: string;
-    nodeEnv: 'development' | 'production' | 'test';
+    nodeEnv: "development" | "production" | "test";
 };
 declare const CONFIG: ServerConfig;
 declare function createServer(): Promise<FastifyInstance>;

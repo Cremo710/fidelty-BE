@@ -13,7 +13,6 @@
     "sourceMap": true,
     "declaration": true,
     "lib": ["ES2022"],
-    "types": ["node", "pg"], // <--- AGGIUNGI "pg" QUI ESPLICITAMENTE
     "allowSyntheticDefaultImports": true
   },
   "include": ["src/**/*"],

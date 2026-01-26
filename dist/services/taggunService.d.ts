@@ -1,3 +1,8 @@
+export declare class TaggunApiError extends Error {
+    statusCode: number;
+    errorCode: string;
+    constructor(message: string, statusCode?: number, errorCode?: string);
+}
 export interface TaggunResponse {
     emailAddress: string;
     merchantName: string;

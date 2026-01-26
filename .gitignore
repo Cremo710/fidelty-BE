@@ -1,3 +1,10 @@
 # dependencies
+dist/
 node_modules/
 package-lock.json
+.env
+.env.local
+.DS_Store
+*.log
+.vscode/
+.idea/
