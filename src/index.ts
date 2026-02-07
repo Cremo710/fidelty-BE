@@ -210,6 +210,60 @@ async function createServer(): Promise<FastifyInstance> {
     }
   });
 
+  // User login endpoint
+  app.post("/api/auth/login", async (request, reply) => {
+    try {
+      console.log("🔑 Ricevuta richiesta di login");
+
+      const body = request.body as any;
+
+      if (!body || !body.email || !body.password) {
+        return reply.status(400).send({
+          success: false,
+          error: "Email e password sono obbligatori",
+          code: "MISSING_FIELDS",
+        });
+      }
+
+      const user = await databaseService.getUserByEmail(body.email);
+
+      if (!user) {
+        return reply.status(404).send({
+          success: false,
+          error: "Utente non trovato",
+          code: "USER_NOT_FOUND",
+        });
+      }
+
+      // Nota: password salvata in chiaro per ora
+      if (user.password !== body.password) {
+        return reply.status(401).send({
+          success: false,
+          error: "Credenziali non valide",
+          code: "INVALID_CREDENTIALS",
+        });
+      }
+
+      return reply.status(200).send({
+        success: true,
+        message: "Login avvenuto con successo",
+        data: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+        },
+      });
+    } catch (error) {
+      console.error("❌ Errore durante il login:", error);
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({
+        success: false,
+        error: errorMessage,
+        code: "LOGIN_ERROR",
+      });
+    }
+  });
+
   // Receipt processing endpoint
   app.post("/api/receipts/process", async (request, reply) => {
     try {
