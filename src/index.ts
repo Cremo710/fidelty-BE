@@ -146,6 +146,70 @@ async function createServer(): Promise<FastifyInstance> {
       }
     });
 
+  // User registration endpoint
+  app.post("/api/auth/register", async (request, reply) => {
+    try {
+      console.log("👤 Ricevuta richiesta di registrazione utente");
+
+      const body = request.body as any;
+
+      if (!body || !body.email || !body.password || !body.name) {
+        return reply.status(400).send({
+          success: false,
+          error: "Email, password e name sono obbligatori",
+          code: "MISSING_FIELDS",
+        });
+      }
+
+      console.log(`🔐 Tentativo di salvataggio utente: ${body.email}`);
+
+      try {
+        const userId = await databaseService.saveUser({
+          name: body.name,
+          email: body.email,
+          password: body.password, // NOTE: password salvata in chiaro per ora
+        });
+
+        return reply.status(201).send({
+          success: true,
+          message: "Utente registrato con successo",
+          data: {
+            id: userId,
+            email: body.email,
+            name: body.name,
+          },
+        });
+      } catch (dbError: any) {
+        console.error("❌ Errore DB durante la registrazione:", dbError.message || dbError);
+
+        // Handle unique violation (Postgres error code 23505) if needed
+        if (dbError && dbError.code === "23505") {
+          return reply.status(409).send({
+            success: false,
+            error: "Email già registrata",
+            code: "EMAIL_EXISTS",
+          });
+        }
+
+        return reply.status(500).send({
+          success: false,
+          error: dbError instanceof Error ? dbError.message : "Errore durante il salvataggio",
+          code: "REGISTRATION_ERROR",
+        });
+      }
+    } catch (error) {
+      console.error("❌ Errore durante la registrazione dell'utente:", error);
+
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+
+      return reply.status(500).send({
+        success: false,
+        error: errorMessage,
+        code: "REGISTRATION_ERROR",
+      });
+    }
+  });
+
   // Receipt processing endpoint
   app.post("/api/receipts/process", async (request, reply) => {
     try {

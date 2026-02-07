@@ -43,6 +43,18 @@ export class DatabaseService {
       -- Indici per velocizzare le ricerche
       CREATE INDEX IF NOT EXISTS idx_receipts_doc_id ON receipts(doc_id);
       CREATE INDEX IF NOT EXISTS idx_receipts_merchant_tax_id ON receipts(merchant_tax_id);
+      
+      -- Tabella utenti
+      CREATE TABLE IF NOT EXISTS utenti (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_utenti_email ON utenti(email);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
@@ -50,6 +62,49 @@ export class DatabaseService {
         "❌ Errore durante l'inizializzazione delle tabelle:",
         error,
       );
+      throw error;
+    }
+  }
+
+  async saveUser(userData: { name: string; email: string; password: string }): Promise<number> {
+    const client = await this.pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const insertUserQuery = `
+      INSERT INTO utenti (name, email, password, updated_at)
+      VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+      ON CONFLICT (email) DO UPDATE SET
+        name = EXCLUDED.name,
+        password = EXCLUDED.password,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING id
+    `;
+
+      const values = [userData.name, userData.email, userData.password];
+      const result = await client.query(insertUserQuery, values);
+      const userId = result.rows[0].id;
+
+      await client.query("COMMIT");
+      console.log(`✅ Utente salvato/aggiornato con ID: ${userId}`);
+      return userId;
+    } catch (error: any) {
+      await client.query("ROLLBACK");
+      console.error("❌ Errore durante il salvataggio dell'utente:", error.message);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getUserByEmail(email: string): Promise<any> {
+    try {
+      const query = "SELECT * FROM utenti WHERE email = $1";
+      const result = await this.pool.query(query, [email]);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error("❌ Errore durante il recupero dell'utente:", error);
       throw error;
     }
   }
