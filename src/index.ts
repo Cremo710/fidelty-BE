@@ -1,6 +1,3 @@
-// 1. Log iniziale per confermare l'avvio
-console.log("🔍 1. Inizio esecuzione script");
-
 import Fastify from "fastify";
 import type { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
@@ -8,48 +5,28 @@ import { config } from "dotenv";
 import multipart from "@fastify/multipart";
 import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
+import { receiptsController } from "./controllers/receiptsController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
+
 const { Client } = pg;
 
-// Load environment variables
-try {
-  config();
-  console.log("✅ .env caricato correttamente");
-} catch (error) {
-  console.error("❌ Errore nel caricamento del file .env:", error);
-}
+// ==================== CONFIGURATION ====================
 
-// Types
+// Load environment variables
+config();
+
 type ServerConfig = {
   port: number;
   host: string;
   nodeEnv: "development" | "production" | "test";
 };
 
-// Configuration
 const CONFIG: ServerConfig = {
   port: Number(process.env.PORT || 4000),
   host: process.env.HOST || "0.0.0.0",
   nodeEnv: (process.env.NODE_ENV as ServerConfig["nodeEnv"]) || "development",
 };
-
-// Verifica che le dipendenze siano caricate correttamente
-// async function checkDependencies() {
-//   try {
-//     // La sintassi corretta ora usa 'with' al posto di 'assert'
-//     await import("fastify/package.json", { with: { type: "json" } });
-//     await import("@fastify/cors/package.json", { with: { type: "json" } });
-//     await import("dotenv/package.json", { with: { type: "json" } });
-//     console.log("✅ Dipendenze verificate");
-//   } catch (error) {
-//     console.error("❌ Errore durante la verifica delle dipendenze:", error);
-//     // process.exit(1); // Valuta se bloccare davvero il server per questo
-//   }
-// }
-
-// Esegui la verifica delle dipendenze
-// await checkDependencies();
 
 // Create Fastify server
 async function createServer(): Promise<FastifyInstance> {
@@ -104,53 +81,17 @@ async function createServer(): Promise<FastifyInstance> {
 
   // Rate limiting implementato manualmente nei controller tramite contatori
 
-  // Health check endpoint
-  // app.get('/api/health', async () => ({
-  //   status: 'ok',
-  //   timestamp: new Date().toISOString(),
-  //   uptime: process.uptime(),
-  //   environment: CONFIG.nodeEnv,
-  // }));
+  // Root endpoint
+  app.get("/", async () => ({
+    message: "Benvenuto nel server di Loyalty Bar",
+    status: "online",
+    environment: CONFIG.nodeEnv,
+  }));
 
-  // Example endpoint
-  // app.get('/api/hello', async () => ({
-  //   message: 'Hello from Loyalty Bar API',
-  //   timestamp: new Date().toISOString(),
-  //   environment: CONFIG.nodeEnv,
-  // }));
+  // Database connection test
+  testDatabaseConnection();
 
-  // Database setup
-
-  // Configura il database (la stringa la prende da Render)
-  const client = new Client({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
-  });
-
-  client
-    .connect()
-    .then(() => {
-      console.log("✅ Connessione al database stabilita con successo!");
-
-      // Test rapido: chiediamo al database l'ora attuale
-      return client.query("SELECT NOW()");
-    })
-    .then((res: any) => {
-      console.log("⏱️ Risposta dal DB (Ora server):", res.rows[0].now);
-    })
-    .catch((err: any) => {
-      console.error("❌ Errore critico di connessione al database:");
-      console.error("Dettaglio:", err.message);
-
-      // Suggerimento utile nei log
-      if (!process.env.DATABASE_URL) {
-        console.error(
-          "👉 ATTENZIONE: La variabile DATABASE_URL non è definita su Render!",
-        );
-      }
-    });
-
-  // ==================== AUTH ENDPOINTS (con rate limiting e validazione) ====================
+  // ==================== AUTH ENDPOINTS ====================
 
   // User registration endpoint
   app.post("/api/auth/register", async (request, reply) => {
@@ -179,128 +120,14 @@ async function createServer(): Promise<FastifyInstance> {
 
   // ==================== RECEIPT ENDPOINTS ====================
 
-  // Receipt processing endpoint
+  // Receipt processing endpoint (OCR processing via Taggun)
   app.post("/api/receipts/process", async (request, reply) => {
-    try {
-      console.log("📸 Ricevuta richiesta di elaborazione ricevuta");
-
-      const data = await request.file();
-
-      if (!data) {
-        return reply.status(400).send({
-          error: "Nessun file caricato",
-          code: "MISSING_FILE",
-        });
-      }
-
-      const filename = data.filename || "receipt.jpg";
-      const extension = filename.toLowerCase().split(".").pop();
-      const isCompressible = ["jpg", "jpeg", "png"].includes(extension || "");
-      const MAX_INITIAL_SIZE = 20 * 1024 * 1024; // 20MB
-
-      // Leggi il file in chunks per controllare la dimensione
-      console.log("📖 Lettura file in progress...");
-      const chunks: Buffer[] = [];
-      let totalSize = 0;
-
-      for await (const chunk of data.file) {
-        chunks.push(chunk);
-        totalSize += chunk.length;
-
-        // Se supera 20MB e non è compressibile, ferma subito
-        if (totalSize > MAX_INITIAL_SIZE && !isCompressible) {
-          throw new Error(
-            "File troppo grande (>20MB) e non è un'immagine compressibile (JPG/PNG)",
-          );
-        }
-      }
-
-      let buffer = Buffer.concat(chunks) as Buffer<ArrayBuffer>;
-      console.log(
-        `📦 Dimensione file originale: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`,
-      );
-
-      // Se il file supera 20MB e è un'immagine, comprimilo
-      if (buffer.length > MAX_INITIAL_SIZE && isCompressible) {
-        console.log("⚠️  File supera 20MB, compressione in corso...");
-        const { taggunService: tgService } = await import(
-          "./services/taggunService.js"
-        );
-        buffer = (await tgService["compressImage"](
-          buffer,
-          extension || "jpeg",
-        )) as Buffer<ArrayBuffer>;
-        console.log(
-          `✅ Immagine compressa: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`,
-        );
-      }
-
-      console.log(`📁 File elaborato: ${filename} (${buffer.length} bytes)`);
-
-      // Importa il servizio Taggun
-      const { taggunService } = await import("./services/taggunService.js");
-
-      // Valida il file
-      await taggunService.validateImageFile(buffer, filename);
-
-      // Processa la ricevuta
-      const result = await taggunService.processReceipt(buffer, filename);
-
-      //TODO: aggiungere controllo sulla validità della ricevuta (es. partitaIVA che deve corrispondere a quelle del BAR, prezzo, data/orario, numeroDocumento, indirizzo etc.)
-      //TODO: aggiungere controllo su eventuali duplicati (check su DB)
-      //TODO: salvataggio della ricevuta sul DB
-
-      console.log("Result:", result);
-      console.log(
-        `✅ Ricevuta elaborata con successo: ${result.merchantName || "Merchant sconosciuto"}`,
-      );
-
-      return reply.status(200).send({
-        success: true,
-        data: result,
-        message: "Ricevuta elaborata con successo",
-      });
-    } catch (error) {
-      console.error("❌ Errore durante l'elaborazione della ricevuta:", error);
-
-      const errorMessage =
-        error instanceof Error ? error.message : "Errore sconosciuto";
-
-      return reply.status(500).send({
-        success: false,
-        error: errorMessage,
-        code: "PROCESSING_ERROR",
-      });
-    }
+    return receiptsController.processReceipt(request, reply);
   });
 
-  // Receipt confirm endpoint
+  // Receipt confirm endpoint (save to database)
   app.post("/api/receipts/confirm", async (request, reply) => {
-    try {
-      const data = request.body;
-
-      console.log("📋 Ricevuta richiesta di conferma ricevuta");
-      console.log("Dati ricevuti:", data);
-
-      // Salva i dati della ricevuta nel database
-      const receiptId = await databaseService.saveReceipt(data);
-
-      return reply.status(200).send({
-        status: "OK",
-        receiptId: receiptId,
-        message: "Ricevuta salvata con successo",
-      });
-    } catch (error) {
-      console.error("❌ Errore durante la conferma della ricevuta:", error);
-
-      const errorMessage =
-        error instanceof Error ? error.message : "Errore sconosciuto";
-
-      return reply.status(500).send({
-        status: "ERROR",
-        error: errorMessage,
-      });
-    }
+    return receiptsController.confirmReceipt(request, reply);
   });
 
   // Graceful shutdown
@@ -313,103 +140,108 @@ async function createServer(): Promise<FastifyInstance> {
   return app;
 }
 
-// Start the server
-async function startServer() {
-  try {
-    console.log("🔄 Inizializzazione server in corso...");
-    console.log("🔍 5. Creazione istanza server...");
+// ==================== HELPER FUNCTIONS ====================
 
-    let app;
-    try {
-      console.log("🔍 5.1 Creazione server in corso...");
-      app = await createServer();
-      console.log("✅ Server creato con successo");
+/**
+ * Test database connection
+ */
+function testDatabaseConnection(): void {
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  });
 
-      // Inizializza il database
-      console.log("🔍 5.2 Inizializzazione database...");
-      await databaseService.initializeTables();
-      console.log("✅ Database inizializzato");
+  client
+    .connect()
+    .then(() => {
+      console.log("✅ Connessione al database OK");
+      return client.query("SELECT NOW()");
+    })
+    .then((res: any) => {
+      console.log(`📅 Database time: ${res.rows[0].now}`);
+      client.end();
+    })
+    .catch((err: any) => {
+      console.error("❌ Errore di connessione al database:", err.message);
+      if (!process.env.DATABASE_URL) {
+        console.error("⚠️  DATABASE_URL non definita");
+      }
+    });
+}
 
-      // Aggiungi un gestore per la radice
-      app.get("/", async (request, reply) => {
-        return {
-          message: "Benvenuto nel server di Loyalty Bar",
-          endpoints: {
-            health: "/api/health",
-            example: "/api/hello",
-            receiptProcessing: "/api/receipts/process",
-          },
-        };
-      });
-
-      console.log("🔍 6. Avvio server in ascolto...");
-    } catch (error) {
-      console.error("❌ Errore durante la creazione del server:", error);
-      process.exit(1);
-    }
-
-    // Aggiungi un gestore per le richieste in entrata
-    app.addHook("onRequest", async (request, reply) => {
+/**
+ * Setup request/response logging and error handling
+ */
+function setupHooks(app: FastifyInstance): void {
+  if (CONFIG.nodeEnv === "development") {
+    app.addHook("onRequest", async (request) => {
       console.log(`📥 ${request.method} ${request.url}`);
     });
+  }
 
-    // Gestisce l'evento di avvio
-    app.addHook("onReady", () => {
-      console.log("✅ Server pronto!");
+  app.addHook("onError", (request, reply, error) => {
+    console.error(`❌ [${request.method} ${request.url}] ${error.message}`);
+  });
+}
+
+/**
+ * Start the Fastify server
+ */
+async function startServer(): Promise<FastifyInstance> {
+  try {
+    console.log("🚀 Avvio server...");
+
+    // Create server instance
+    const app = await createServer();
+    console.log("✅ Server creato");
+
+    // Initialize database
+    await databaseService.initializeTables();
+    console.log("✅ Database inizializzato");
+
+    // Setup hooks
+    setupHooks(app);
+
+    // Start listening
+    const address = await app.listen({
+      port: CONFIG.port,
+      host: CONFIG.host,
     });
 
-    // Gestisce l'evento di errore
-    app.addHook("onError", (request, reply, error, done) => {
-      console.error("❌ Errore durante la richiesta:", error);
-      done();
-    });
-
-    console.log(`🔌 Tentativo di avvio su porta ${CONFIG.port}...`);
-
-    console.log(`🔍 7. Avvio server su ${CONFIG.host}:${CONFIG.port}...`);
-    let address;
-    // Avvia il server
-    console.log(`🔍 7. Tentativo di avvio su ${CONFIG.host}:${CONFIG.port}...`);
-    try {
-      address = await app.listen({
-        port: CONFIG.port,
-        host: CONFIG.host,
-      });
-      console.log(`✅ Server in ascolto su ${address}`);
-    } catch (err: any) {
-      const error = err as NodeJS.ErrnoException;
-      console.error("❌ Errore durante l'avvio del server:", error);
-      if (error.code === "EADDRINUSE") {
-        console.error(`⚠️  La porta ${CONFIG.port} è già in uso!`);
-      }
-      process.exit(1);
-    }
-
-    console.log(`\n🎉 Server avviato con successo!`);
-    console.log(`🌐 URL: ${CONFIG.host}:${CONFIG.port}`);
+    console.log(`\n✨ Server pronto!`);
+    console.log(`🌐 ${address}`);
+    console.log(`🔧 Ambiente: ${CONFIG.nodeEnv}\n`);
 
     return app;
-  } catch (err) {
-    console.error("Error starting server:", err);
+  } catch (err: any) {
+    const error = err as NodeJS.ErrnoException;
+
+    if (error.code === "EADDRINUSE") {
+      console.error(`❌ Porta ${CONFIG.port} già in uso`);
+    } else {
+      console.error("❌ Errore durante l'avvio:", error.message);
+    }
+
     process.exit(1);
   }
 }
 
-// Esporta le funzioni e la configurazione
+// ==================== EXPORTS ====================
+
 export { createServer, startServer, CONFIG };
 
-// Avvia il server solo se il file viene eseguito direttamente
-// e non quando viene importato come modulo
+// ==================== STARTUP ====================
+
+// Start server if this file is executed directly
 const isMain =
   import.meta.url.endsWith("index.ts") ||
-  (process.argv[1] && process.argv[1].endsWith("index.ts")) ||
   import.meta.url.endsWith("index.js") ||
-  (process.argv[1] && process.argv[1].endsWith("index.js"));
+  (process.argv[1] && (process.argv[1].endsWith("index.ts") || process.argv[1].endsWith("index.js")));
 
 if (isMain) {
-  console.log("🚀 Avvio del server...");
   startServer().catch((err) => {
-    console.error("❌ Errore durante l'avvio del server:", err);
+    console.error("❌ Errore critico:", err.message);
     process.exit(1);
   });
 }
+
