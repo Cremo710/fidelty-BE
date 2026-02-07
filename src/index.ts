@@ -7,6 +7,8 @@ import cors from "@fastify/cors";
 import { config } from "dotenv";
 import multipart from "@fastify/multipart";
 import { databaseService } from "./services/databaseService.js";
+import { authController } from "./controllers/authController.js";
+import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 const { Client } = pg;
 
@@ -100,6 +102,8 @@ async function createServer(): Promise<FastifyInstance> {
     },
   });
 
+  // Rate limiting implementato manualmente nei controller tramite contatori
+
   // Health check endpoint
   // app.get('/api/health', async () => ({
   //   status: 'ok',
@@ -146,123 +150,29 @@ async function createServer(): Promise<FastifyInstance> {
       }
     });
 
+  // ==================== AUTH ENDPOINTS (con rate limiting e validazione) ====================
+
   // User registration endpoint
   app.post("/api/auth/register", async (request, reply) => {
-    try {
-      console.log("👤 Ricevuta richiesta di registrazione utente");
-
-      const body = request.body as any;
-
-      if (!body || !body.email || !body.password || !body.name) {
-        return reply.status(400).send({
-          success: false,
-          error: "Email, password e name sono obbligatori",
-          code: "MISSING_FIELDS",
-        });
-      }
-
-      console.log(`🔐 Tentativo di salvataggio utente: ${body.email}`);
-
-      try {
-        const userId = await databaseService.saveUser({
-          name: body.name,
-          email: body.email,
-          password: body.password, // NOTE: password salvata in chiaro per ora
-        });
-
-        return reply.status(201).send({
-          success: true,
-          message: "Utente registrato con successo",
-          data: {
-            id: userId,
-            email: body.email,
-            name: body.name,
-          },
-        });
-      } catch (dbError: any) {
-        console.error("❌ Errore DB durante la registrazione:", dbError.message || dbError);
-
-        // Handle unique violation (Postgres error code 23505) if needed
-        if (dbError && dbError.code === "23505") {
-          return reply.status(409).send({
-            success: false,
-            error: "Email già registrata",
-            code: "EMAIL_EXISTS",
-          });
-        }
-
-        return reply.status(500).send({
-          success: false,
-          error: dbError instanceof Error ? dbError.message : "Errore durante il salvataggio",
-          code: "REGISTRATION_ERROR",
-        });
-      }
-    } catch (error) {
-      console.error("❌ Errore durante la registrazione dell'utente:", error);
-
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-
-      return reply.status(500).send({
-        success: false,
-        error: errorMessage,
-        code: "REGISTRATION_ERROR",
-      });
-    }
+    return authController.register(request, reply);
   });
 
   // User login endpoint
   app.post("/api/auth/login", async (request, reply) => {
-    try {
-      console.log("🔑 Ricevuta richiesta di login");
-
-      const body = request.body as any;
-
-      if (!body || !body.email || !body.password) {
-        return reply.status(400).send({
-          success: false,
-          error: "Email e password sono obbligatori",
-          code: "MISSING_FIELDS",
-        });
-      }
-
-      const user = await databaseService.getUserByEmail(body.email);
-
-      if (!user) {
-        return reply.status(404).send({
-          success: false,
-          error: "Utente non trovato",
-          code: "USER_NOT_FOUND",
-        });
-      }
-
-      // Nota: password salvata in chiaro per ora
-      if (user.password !== body.password) {
-        return reply.status(401).send({
-          success: false,
-          error: "Credenziali non valide",
-          code: "INVALID_CREDENTIALS",
-        });
-      }
-
-      return reply.status(200).send({
-        success: true,
-        message: "Login avvenuto con successo",
-        data: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-        },
-      });
-    } catch (error) {
-      console.error("❌ Errore durante il login:", error);
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({
-        success: false,
-        error: errorMessage,
-        code: "LOGIN_ERROR",
-      });
-    }
+    return authController.login(request, reply);
   });
+
+  // User logout endpoint
+  app.post("/api/auth/logout", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return authController.logout(request, reply);
+  });
+
+  // Get user profile (protected route)
+  app.get("/api/auth/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return authController.getProfile(request, reply);
+  });
+
+  // ==================== RECEIPT ENDPOINTS ====================
 
   // Receipt processing endpoint
   app.post("/api/receipts/process", async (request, reply) => {

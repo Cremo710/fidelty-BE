@@ -55,6 +55,19 @@ export class DatabaseService {
       );
 
       CREATE INDEX IF NOT EXISTS idx_utenti_email ON utenti(email);
+
+      -- Tabella per il refresh token (per future implementazioni)
+      CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        token TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        revoked BOOLEAN DEFAULT FALSE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
@@ -207,6 +220,13 @@ export class DatabaseService {
   async closePool(): Promise<void> {
     await this.pool.end();
     console.log("🗄️  Pool di connessioni PostgreSQL chiuso");
+  }
+
+  /**
+   * Espone il pool per accesso esterno (utilizzato dal repository)
+   */
+  getPool(): pkg.Pool {
+    return this.pool;
   }
 }
 
