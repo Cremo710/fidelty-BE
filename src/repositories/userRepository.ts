@@ -169,6 +169,86 @@ export class UserRepository {
       throw error;
     }
   }
+
+  /**
+   * Salva un refresh token nel database
+   */
+  async saveRefreshToken(
+    userId: number,
+    token: string,
+    expiresAt: Date
+  ): Promise<void> {
+    const query = `
+      INSERT INTO refresh_tokens (user_id, token, expires_at, revoked)
+      VALUES ($1, $2, $3, false)
+      ON CONFLICT (token) DO UPDATE SET revoked = false
+    `;
+
+    try {
+      await databaseService.getPool().query(query, [userId, token, expiresAt]);
+      console.log(`✅ Refresh token salvato per utente: ${userId}`);
+    } catch (error) {
+      console.error("Errore nel salvataggio del refresh token:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Recupera un refresh token dal database
+   */
+  async findRefreshToken(token: string): Promise<any> {
+    const query = `
+      SELECT id, user_id, token, expires_at, revoked, created_at
+      FROM refresh_tokens
+      WHERE token = $1
+    `;
+
+    try {
+      const result = await databaseService.getPool().query(query, [token]);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error("Errore nel recupero del refresh token:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Revoca un refresh token (logout)
+   */
+  async revokeRefreshToken(token: string): Promise<void> {
+    const query = `
+      UPDATE refresh_tokens
+      SET revoked = true
+      WHERE token = $1
+    `;
+
+    try {
+      await databaseService.getPool().query(query, [token]);
+      console.log("✅ Refresh token revocato");
+    } catch (error) {
+      console.error("Errore nella revoca del refresh token:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Revoca tutti i refresh token di un utente (logout da tutti i dispositivi)
+   */
+  async revokeAllUserTokens(userId: number): Promise<void> {
+    const query = `
+      UPDATE refresh_tokens
+      SET revoked = true
+      WHERE user_id = $1 AND revoked = false
+    `;
+
+    try {
+      await databaseService.getPool().query(query, [userId]);
+      console.log(`✅ Tutti i refresh token revocati per utente: ${userId}`);
+    } catch (error) {
+      console.error("Errore nella revoca dei refresh token:", error);
+      throw error;
+    }
+  }
 }
 
 // Istanza singleton del repository

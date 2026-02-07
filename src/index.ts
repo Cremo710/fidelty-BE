@@ -167,6 +167,11 @@ async function createServer(): Promise<FastifyInstance> {
     return authController.logout(request, reply);
   });
 
+  // Refresh access token endpoint (uses refresh token from body)
+  app.post("/api/auth/refresh", async (request, reply) => {
+    return authController.refreshToken(request, reply);
+  });
+
   // Get user profile (protected route)
   app.get("/api/auth/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
     return authController.getProfile(request, reply);
