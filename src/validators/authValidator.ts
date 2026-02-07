@@ -32,9 +32,17 @@ export const loginSchema = z.object({
     .min(1, "Password è obbligatoria"),
 });
 
+// Schema di validazione per refresh token
+export const refreshSchema = z.object({
+  refreshToken: z
+    .string()
+    .min(1, "Refresh token obbligatorio"),
+});
+
 // Types derivati dagli schema
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type RefreshInput = z.infer<typeof refreshSchema>;
 
 // Funzione helper per validare
 export function validateRegisterInput(data: unknown) {
@@ -57,6 +65,23 @@ export function validateRegisterInput(data: unknown) {
 export function validateLoginInput(data: unknown) {
   try {
     return { success: true, data: loginSchema.parse(data) };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return {
+        success: false,
+        errors: error.errors.map((e) => ({
+          field: e.path.join("."),
+          message: e.message,
+        })),
+      };
+    }
+    return { success: false, errors: [{ field: "unknown", message: String(error) }] };
+  }
+}
+
+export function validateRefreshInput(data: unknown) {
+  try {
+    return { success: true, data: refreshSchema.parse(data) };
   } catch (error) {
     if (error instanceof z.ZodError) {
       return {

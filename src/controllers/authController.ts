@@ -4,8 +4,10 @@ import { userRepository } from "../repositories/userRepository.js";
 import {
   validateRegisterInput,
   validateLoginInput,
+  validateRefreshInput,
   type RegisterInput,
   type LoginInput,
+  type RefreshInput,
 } from "../validators/authValidator.js";
 
 /**
@@ -129,8 +131,16 @@ export class AuthController {
         });
       }
 
-      // Genera il JWT token
-      const token = authService.generateToken(user.id, user.email);
+      // Genera il JWT access token (breve durata)
+      const accessToken = authService.generateToken(user.id, user.email, "15m");
+
+      // Genera il refresh token (lunga durata)
+      const refreshToken = authService.generateRefreshToken(user.id, user.email);
+
+      // Salva il refresh token nel database
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7); // 7 giorni
+      await userRepository.saveRefreshToken(user.id, refreshToken, expiresAt);
 
       console.log(`✅ Login riuscito per: ${input.email}`);
 
@@ -141,7 +151,9 @@ export class AuthController {
           id: user.id,
           email: user.email,
           name: user.name,
-          token,
+          accessToken,
+          refreshToken,
+          expiresIn: 900, // 15 minuti in secondi
         },
       });
     } catch (error) {
@@ -158,15 +170,112 @@ export class AuthController {
   }
 
   /**
-   * Handler per il logout (invalidamento token - facoltativo)
+   * Handler per il refresh token - ottiene nuovo access token
+   */
+  async refreshToken(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      console.log("🔄 Ricevuta richiesta di refresh token");
+
+      const body = request.body as unknown;
+
+      // Validazione input con Zod
+      const validation = validateRefreshInput(body);
+      if (!validation.success) {
+        return reply.status(400).send({
+          success: false,
+          error: "Refresh token mancante o non valido",
+          code: "VALIDATION_ERROR",
+          details: validation.errors,
+        });
+      }
+
+      const input = validation.data as RefreshInput;
+      const authService = getAuthService();
+
+      // Verifica il refresh token (firma e scadenza)
+      const decoded = authService.verifyRefreshToken(input.refreshToken);
+      if (!decoded) {
+        console.log("⚠️  Refresh token non valido o scaduto");
+        return reply.status(401).send({
+          success: false,
+          error: "Refresh token non valido o scaduto",
+          code: "INVALID_REFRESH_TOKEN",
+        });
+      }
+
+      // Verifica che il refresh token sia nel database e non revocato
+      const storedToken = await userRepository.findRefreshToken(input.refreshToken);
+      if (!storedToken || storedToken.revoked) {
+        console.log(`⚠️  Refresh token revocato o non trovato per utente: ${decoded.userId}`);
+        return reply.status(401).send({
+          success: false,
+          error: "Refresh token revocato o non trovato",
+          code: "REVOKED_REFRESH_TOKEN",
+        });
+      }
+
+      // Recupera l'utente dal database
+      const user = await userRepository.findById(decoded.userId);
+      if (!user) {
+        console.log(`⚠️  Utente non trovato per refresh token`);
+        return reply.status(404).send({
+          success: false,
+          error: "Utente non trovato",
+          code: "USER_NOT_FOUND",
+        });
+      }
+
+      // Genera nuovo access token
+      const newAccessToken = authService.generateToken(user.id, user.email, "15m");
+
+      console.log(`✅ Refresh token accettato per: ${user.email}`);
+
+      return reply.status(200).send({
+        success: true,
+        message: "Token rinnovato con successo",
+        data: {
+          accessToken: newAccessToken,
+          expiresIn: 900, // 15 minuti in secondi
+        },
+      });
+    } catch (error) {
+      console.error("❌ Errore durante il refresh token:", error);
+
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+
+      return reply.status(500).send({
+        success: false,
+        error: errorMessage,
+        code: "REFRESH_TOKEN_ERROR",
+      });
+    }
+  }
+
+  /**
+   * Handler per il logout (revoca refresh token)
    */
   async logout(request: FastifyRequest, reply: FastifyReply) {
     try {
       console.log("🚪 Ricevuta richiesta di logout");
 
-      // In un sistema reale, qui invalideresti il token
-      // Ad esempio, aggiungendolo a una blacklist o salvandolo in cache
-      // Per ora rispondiamo semplicemente con successo
+      const body = request.body as unknown;
+      const userId = (request as any).userId;
+
+      if (!userId) {
+        return reply.status(401).send({
+          success: false,
+          error: "Utente non autenticato",
+          code: "UNAUTHORIZED",
+        });
+      }
+
+      // Verifica se è stato passato un refresh token da revocare
+      const refreshTokenData = body as any;
+      if (refreshTokenData?.refreshToken) {
+        // Revoca il refresh token dal database
+        await userRepository.revokeRefreshToken(refreshTokenData.refreshToken);
+        console.log(`✅ Refresh token revocato per utente: ${userId}`);
+      }
 
       return reply.status(200).send({
         success: true,
