@@ -39,13 +39,16 @@ export class BarController {
       for await (const part of parts) {
         if (part.type === "field") {
           // Campo testo - leggi il valore
-          const value = await part.toBuffer?.() || part.value;
-          data[part.fieldname] = typeof value === "string" ? value : value?.toString();
+          data[part.fieldname] = part.value as string;
         } else if (part.type === "file") {
           // File
           if (part.fieldname === "coverImage") {
-            // Leggi il file completo nel buffer
-            fileBuffer = await part.toBuffer();
+            // Leggi il file dallo stream
+            const chunks: Buffer[] = [];
+            for await (const chunk of part.file) {
+              chunks.push(chunk as Buffer);
+            }
+            fileBuffer = Buffer.concat(chunks);
             fileMimeType = part.mimetype;
             fileName = part.filename;
 
@@ -63,7 +66,7 @@ export class BarController {
         });
       }
 
-      if (!isPngFile(fileMimeType)) {
+      if (!fileMimeType || !isPngFile(fileMimeType)) {
         return reply.status(400).send({
           success: false,
           error: "Solo file PNG sono accettati",
