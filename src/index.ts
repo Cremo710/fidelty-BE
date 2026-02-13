@@ -6,6 +6,7 @@ import multipart from "@fastify/multipart";
 import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
 import { receiptsController } from "./controllers/receiptsController.js";
+import { barController } from "./controllers/barController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 
@@ -116,6 +117,18 @@ async function createServer(): Promise<FastifyInstance> {
   // Get user profile (protected route)
   app.get("/api/auth/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
     return authController.getProfile(request, reply);
+  });
+
+  // ==================== BAR ENDPOINTS ====================
+
+  // Bar registration endpoint (protected route)
+  app.post("/api/bar/registration", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.register(request, reply);
+  });
+
+  // Get bar profile (protected route)
+  app.get("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.getBarByUser(request, reply);
   });
 
   // ==================== RECEIPT ENDPOINTS ====================

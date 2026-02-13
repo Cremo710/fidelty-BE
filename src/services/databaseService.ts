@@ -68,6 +68,22 @@ export class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
       CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);
+
+      -- Tabella per i bar registrati
+      CREATE TABLE IF NOT EXISTS bars (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        iva VARCHAR(20) UNIQUE NOT NULL,
+        merchant_name VARCHAR(255) NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        address VARCHAR(500) NOT NULL,
+        image TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_bars_user_id ON bars(user_id);
+      CREATE INDEX IF NOT EXISTS idx_bars_iva ON bars(iva);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
