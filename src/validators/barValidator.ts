@@ -2,29 +2,28 @@ import { z } from "zod";
 
 // Schema di validazione per la registrazione del bar
 export const barRegistrationSchema = z.object({
-  iva: z
+  piva: z
     .string()
-    .min(11, "IVA deve avere almeno 11 caratteri")
-    .max(20, "IVA non può superare 20 caratteri")
+    .regex(/^\d{11}$/, "Partita IVA deve contenere esattamente 11 cifre numeriche")
     .trim(),
-  merchantName: z
+  barName: z
     .string()
-    .min(2, "Nome commerciale deve avere almeno 2 caratteri")
-    .max(255, "Nome commerciale non può superare 255 caratteri")
+    .min(2, "Nome del bar deve avere almeno 2 caratteri")
+    .max(255, "Nome del bar non può superare 255 caratteri")
     .trim(),
-  name: z
+  businessName: z
     .string()
-    .min(2, "Nome del locale deve avere almeno 2 caratteri")
-    .max(255, "Nome del locale non può superare 255 caratteri")
+    .min(2, "Ragione sociale deve avere almeno 2 caratteri")
+    .max(255, "Ragione sociale non può superare 255 caratteri")
     .trim(),
   address: z
     .string()
     .min(5, "Indirizzo deve avere almeno 5 caratteri")
     .max(500, "Indirizzo non può superare 500 caratteri")
     .trim(),
-  image: z
+  coverImageUrl: z
     .string()
-    .url("Image deve essere un URL valido")
+    .url("URL immagine non valido")
     .optional()
     .nullable(),
 });

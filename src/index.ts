@@ -3,14 +3,18 @@ import type { FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import { config } from "dotenv";
 import multipart from "@fastify/multipart";
+import staticPlugin from "@fastify/static";
 import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
 import { receiptsController } from "./controllers/receiptsController.js";
 import { barController } from "./controllers/barController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const { Client } = pg;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ==================== CONFIGURATION ====================
 
@@ -79,6 +83,18 @@ async function createServer(): Promise<FastifyInstance> {
       fileSize: 500 * 1024 * 1024, // 500MB limit (verrà compresso se > 20MB)
     },
   });
+
+  // Register static file serving
+  const uploadsDir = path.join(__dirname, "../uploads");
+  try {
+    await app.register(staticPlugin, {
+      root: uploadsDir,
+      prefix: "/uploads",
+    });
+    console.log(`📁 Static files served from: ${uploadsDir}`);
+  } catch (error) {
+    console.warn(`⚠️  Could not register static file serving: ${error}`);
+  }
 
   // Rate limiting implementato manualmente nei controller tramite contatori
 

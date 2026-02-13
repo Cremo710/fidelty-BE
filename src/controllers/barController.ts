@@ -4,6 +4,7 @@ import {
   validateBarRegistrationInput,
   type BarRegistrationInput,
 } from "../validators/barValidator.js";
+import { saveAndOptimizeImage, isPngFile, isFileSizeValid } from "../utils/imageUpload.js";
 
 /**
  * Bar Controller
@@ -27,10 +28,59 @@ export class BarController {
         });
       }
 
-      const body = request.body as unknown;
+      // Recupera i dati dal multipart form
+      const data: any = {};
+      let fileBuffer: Buffer | null = null;
+      let fileMimeType: string | null = null;
+      let fileName: string | null = null;
+
+      // Itera sui campi multipart
+      const parts = request.parts();
+      for await (const part of parts) {
+        if (part.type === "field") {
+          // Campo testo - leggi il valore
+          const value = await part.toBuffer?.() || part.value;
+          data[part.fieldname] = typeof value === "string" ? value : value?.toString();
+        } else if (part.type === "file") {
+          // File
+          if (part.fieldname === "coverImage") {
+            // Leggi il file completo nel buffer
+            fileBuffer = await part.toBuffer();
+            fileMimeType = part.mimetype;
+            fileName = part.filename;
+
+            console.log(`📁 File ricevuto: ${fileName} (${fileMimeType}, ${fileBuffer.length} bytes)`);
+          }
+        }
+      }
+
+      // Validazione file
+      if (!fileBuffer || !fileName) {
+        return reply.status(400).send({
+          success: false,
+          error: "Foto di copertina obbligatoria",
+          code: "MISSING_FILE",
+        });
+      }
+
+      if (!isPngFile(fileMimeType)) {
+        return reply.status(400).send({
+          success: false,
+          error: "Solo file PNG sono accettati",
+          code: "INVALID_FILE_TYPE",
+        });
+      }
+
+      if (!isFileSizeValid(fileBuffer.length)) {
+        return reply.status(400).send({
+          success: false,
+          error: "File troppo grande (massimo 5MB)",
+          code: "FILE_TOO_LARGE",
+        });
+      }
 
       // Validazione input con Zod
-      const validation = validateBarRegistrationInput(body);
+      const validation = validateBarRegistrationInput(data);
       if (!validation.success) {
         return reply.status(400).send({
           success: false,
@@ -42,13 +92,13 @@ export class BarController {
 
       const input = validation.data as BarRegistrationInput;
 
-      // Verifica se l'IVA è già registrata
-      const existingBar = await barRepository.ivaExists(input.iva);
+      // Verifica se la P.IVA è già registrata
+      const existingBar = await barRepository.pivaExists(input.piva);
       if (existingBar) {
         return reply.status(409).send({
           success: false,
-          error: "IVA già registrata",
-          code: "IVA_EXISTS",
+          error: "Partita IVA già registrata",
+          code: "PIVA_EXISTS",
         });
       }
 
@@ -62,29 +112,43 @@ export class BarController {
         });
       }
 
+      // Salva e ottimizza l'immagine
+      let imageUrl: string | null = null;
+      try {
+        imageUrl = await saveAndOptimizeImage(fileBuffer, fileName);
+        console.log(`✅ Immagine salvata: ${imageUrl}`);
+      } catch (error) {
+        console.error("❌ Errore nel salvataggio dell'immagine:", error);
+        return reply.status(500).send({
+          success: false,
+          error: "Errore nel salvataggio della foto",
+          code: "IMAGE_SAVE_ERROR",
+        });
+      }
+
       // Salva il bar nel database
       const barId = await barRepository.createBar({
         userId,
-        iva: input.iva,
-        merchantName: input.merchantName,
-        name: input.name,
+        piva: input.piva,
+        merchantName: input.businessName,
+        name: input.barName,
         address: input.address,
-        image: input.image || null,
+        image: imageUrl,
       });
 
-      console.log(`✅ Bar registrato con successo: ${input.name} (ID: ${barId})`);
+      console.log(`✅ Bar registrato con successo: ${input.barName} (ID: ${barId})`);
 
-      return reply.status(201).send({
+      return reply.status(200).send({
         success: true,
         message: "Bar registrato con successo",
         data: {
           id: barId,
           userId,
-          iva: input.iva,
-          merchantName: input.merchantName,
-          name: input.name,
+          piva: input.piva,
+          barName: input.barName,
+          businessName: input.businessName,
           address: input.address,
-          image: input.image || null,
+          coverImage: imageUrl,
         },
       });
     } catch (error) {
@@ -122,14 +186,23 @@ export class BarController {
       if (!bar) {
         return reply.status(404).send({
           success: false,
-          error: "Bar non trovato",
+          message: "Bar non trovato",
           code: "BAR_NOT_FOUND",
         });
       }
 
       return reply.status(200).send({
         success: true,
-        data: bar,
+        data: {
+          id: bar.id,
+          piva: bar.iva,
+          barName: bar.name,
+          businessName: bar.merchant_name,
+          address: bar.address,
+          coverImage: bar.image,
+          createdAt: bar.created_at,
+          updatedAt: bar.updated_at,
+        },
       });
     } catch (error) {
       console.error("❌ Errore durante il recupero del bar:", error);

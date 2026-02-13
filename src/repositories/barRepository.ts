@@ -19,12 +19,12 @@ export interface BarDTO {
 export class BarRepository {
   /**
    * Salva un nuovo bar nel database
-   * @param bar - Dati del bar {userId, iva, merchantName, name, address, image}
+   * @param bar - Dati del bar {userId, piva, merchantName, name, address, image}
    * @returns ID del bar creato
    */
   async createBar(bar: {
     userId: number;
-    iva: string;
+    piva: string;
     merchantName: string;
     name: string;
     address: string;
@@ -43,7 +43,7 @@ export class BarRepository {
 
       const values = [
         bar.userId,
-        bar.iva,
+        bar.piva,
         bar.merchantName,
         bar.name,
         bar.address,
@@ -98,19 +98,28 @@ export class BarRepository {
   }
 
   /**
-   * Verifica se un'IVA è già registrata
+   * Verifica se una P.IVA è già registrata
+   * @param piva - P.IVA da verificare
+   * @returns true se la P.IVA esiste, false altrimenti
+   */
+  async pivaExists(piva: string): Promise<boolean> {
+    try {
+      const query = "SELECT 1 FROM bars WHERE iva = $1 LIMIT 1";
+      const result = await databaseService.getPool().query(query, [piva]);
+      return result.rows.length > 0;
+    } catch (error) {
+      console.error("❌ Errore durante la verifica della P.IVA:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Verifica se un'IVA è già registrata (deprecato, usa pivaExists)
    * @param iva - IVA da verificare
    * @returns true se l'IVA esiste, false altrimenti
    */
   async ivaExists(iva: string): Promise<boolean> {
-    try {
-      const query = "SELECT 1 FROM bars WHERE iva = $1 LIMIT 1";
-      const result = await databaseService.getPool().query(query, [iva]);
-      return result.rows.length > 0;
-    } catch (error) {
-      console.error("❌ Errore durante la verifica dell'IVA:", error);
-      throw error;
-    }
+    return this.pivaExists(iva);
   }
 
   /**
