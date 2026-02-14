@@ -5,6 +5,7 @@ import {
   type BarRegistrationInput,
 } from "../validators/barValidator.js";
 import { saveAndOptimizeImage, isPngFile, isFileSizeValid } from "../utils/imageUpload.js";
+import fetch from 'node-fetch';
 
 /**
  * Bar Controller
@@ -129,7 +130,31 @@ export class BarController {
         });
       }
 
-      // Salva il bar nel database
+      // Prova a geocodificare l'indirizzo se è disponibile una API key
+      let latitude: number | null = null;
+      let longitude: number | null = null;
+      try {
+        const apiKey = process.env.GOOGLE_GEOCODE_API_KEY;
+        if (apiKey) {
+          const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
+            input.address
+          )}&key=${apiKey}`;
+          const geoResp = await fetch(geocodeUrl);
+          const geoJson = await geoResp.json();
+          if (geoJson.status === 'OK' && geoJson.results && geoJson.results[0]) {
+            const loc = geoJson.results[0].geometry.location;
+            latitude = Number(loc.lat);
+            longitude = Number(loc.lng);
+            console.log(`📍 Geocoding OK: ${latitude}, ${longitude}`);
+          } else {
+            console.log('⚠️ Geocoding non disponibile o fallito:', geoJson.status);
+          }
+        }
+      } catch (err) {
+        console.warn('⚠️ Errore durante la geocodifica:', err);
+      }
+
+      // Salva il bar nel database (includendo lat/lng se presenti)
       const barId = await barRepository.createBar({
         userId,
         piva: input.piva,
@@ -137,6 +162,8 @@ export class BarController {
         name: input.barName,
         address: input.address,
         image: imageUrl,
+        latitude,
+        longitude,
       });
 
       console.log(`✅ Bar registrato con successo: ${input.barName} (ID: ${barId})`);
@@ -152,6 +179,8 @@ export class BarController {
           businessName: input.businessName,
           address: input.address,
           coverImage: imageUrl,
+          latitude,
+          longitude,
         },
       });
     } catch (error) {
@@ -217,6 +246,19 @@ export class BarController {
         error: errorMessage,
         code: "RETRIEVAL_ERROR",
       });
+    }
+  }
+
+  /**
+   * Lista tutti i bar con coordinate per la mappa
+   */
+  async listBars(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const bars = await barRepository.getAllBars();
+      return reply.status(200).send({ success: true, data: bars });
+    } catch (error) {
+      console.error('❌ Errore durante il recupero lista bar:', error);
+      return reply.status(500).send({ success: false, error: 'Errore nel recupero dei bar' });
     }
   }
 }

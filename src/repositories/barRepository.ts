@@ -8,6 +8,8 @@ export interface BarDTO {
   name: string;
   address: string;
   image: string | null;
+  latitude: number | null;
+  longitude: number | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -29,6 +31,8 @@ export class BarRepository {
     name: string;
     address: string;
     image?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
   }): Promise<number> {
     const client = await databaseService.getPool().connect();
 
@@ -36,8 +40,8 @@ export class BarRepository {
       await client.query("BEGIN");
 
       const query = `
-        INSERT INTO bars (user_id, iva, merchant_name, name, address, image, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        INSERT INTO bars (user_id, iva, merchant_name, name, address, latitude, longitude, image, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
         RETURNING id
       `;
 
@@ -47,6 +51,8 @@ export class BarRepository {
         bar.merchantName,
         bar.name,
         bar.address,
+        bar.latitude ?? null,
+        bar.longitude ?? null,
         bar.image || null,
       ];
 
@@ -93,6 +99,28 @@ export class BarRepository {
       return result.rows[0] || null;
     } catch (error) {
       console.error("❌ Errore durante il recupero del bar per user_id:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Recupera tutti i bar con lat/lng per mappa
+   */
+  async getAllBars(): Promise<Array<{
+    id: number;
+    name: string;
+    merchant_name: string;
+    address: string;
+    image: string | null;
+    latitude: number | null;
+    longitude: number | null;
+  }>> {
+    try {
+      const query = `SELECT id, name, merchant_name, address, image, latitude, longitude FROM bars WHERE latitude IS NOT NULL AND longitude IS NOT NULL`;
+      const result = await databaseService.getPool().query(query);
+      return result.rows || [];
+    } catch (error) {
+      console.error('❌ Errore durante il recupero dei bar:', error);
       throw error;
     }
   }

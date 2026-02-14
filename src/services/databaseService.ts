@@ -77,6 +77,8 @@ export class DatabaseService {
         merchant_name VARCHAR(255) NOT NULL,
         name VARCHAR(255) NOT NULL,
         address VARCHAR(500) NOT NULL,
+        latitude DOUBLE PRECISION,
+        longitude DOUBLE PRECISION,
         image TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
