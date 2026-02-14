@@ -1,39 +1,22 @@
-// 1. Log iniziale per confermare l'avvio
-console.log("🔍 1. Inizio esecuzione script");
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { config } from "dotenv";
 import multipart from "@fastify/multipart";
 import { databaseService } from "./services/databaseService.js";
+import { authController } from "./controllers/authController.js";
+import { receiptsController } from "./controllers/receiptsController.js";
+import { barController } from "./controllers/barController.js";
+import { authenticateToken } from "./middleware/authenticateToken.js";
+import pg from "pg";
+const { Client } = pg;
+// ==================== CONFIGURATION ====================
 // Load environment variables
-try {
-    config();
-    console.log("✅ .env caricato correttamente");
-}
-catch (error) {
-    console.error("❌ Errore nel caricamento del file .env:", error);
-}
-// Configuration
+config();
 const CONFIG = {
     port: Number(process.env.PORT || 4000),
     host: process.env.HOST || "0.0.0.0",
     nodeEnv: process.env.NODE_ENV || "development",
 };
-// Verifica che le dipendenze siano caricate correttamente
-// async function checkDependencies() {
-//   try {
-//     // La sintassi corretta ora usa 'with' al posto di 'assert'
-//     await import("fastify/package.json", { with: { type: "json" } });
-//     await import("@fastify/cors/package.json", { with: { type: "json" } });
-//     await import("dotenv/package.json", { with: { type: "json" } });
-//     console.log("✅ Dipendenze verificate");
-//   } catch (error) {
-//     console.error("❌ Errore durante la verifica delle dipendenze:", error);
-//     // process.exit(1); // Valuta se bloccare davvero il server per questo
-//   }
-// }
-// Esegui la verifica delle dipendenze
-// await checkDependencies();
 // Create Fastify server
 async function createServer() {
     const app = Fastify({
@@ -79,129 +62,57 @@ async function createServer() {
             fileSize: 500 * 1024 * 1024, // 500MB limit (verrà compresso se > 20MB)
         },
     });
-    // Health check endpoint
-    // app.get('/api/health', async () => ({
-    //   status: 'ok',
-    //   timestamp: new Date().toISOString(),
-    //   uptime: process.uptime(),
-    //   environment: CONFIG.nodeEnv,
-    // }));
-    // Example endpoint
-    // app.get('/api/hello', async () => ({
-    //   message: 'Hello from Loyalty Bar API',
-    //   timestamp: new Date().toISOString(),
-    //   environment: CONFIG.nodeEnv,
-    // }));
-    // Database setup
-    const { Client } = require("pg");
-    // Configura il database (la stringa la prende da Render)
-    const client = new Client({
-        connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false },
+    // Rate limiting implementato manualmente nei controller tramite contatori
+    // Root endpoint
+    app.get("/", async () => ({
+        message: "Benvenuto nel server di Loyalty Bar",
+        status: "online",
+        environment: CONFIG.nodeEnv,
+    }));
+    // Database connection test
+    testDatabaseConnection();
+    // ==================== AUTH ENDPOINTS ====================
+    // User registration endpoint
+    app.post("/api/auth/register", async (request, reply) => {
+        return authController.register(request, reply);
     });
-    client.connect()
-        .then(() => {
-        console.log("✅ Connessione al database stabilita con successo!");
-        // Test rapido: chiediamo al database l'ora attuale
-        return client.query('SELECT NOW()');
-    })
-        .then((res) => {
-        console.log("⏱️ Risposta dal DB (Ora server):", res.rows[0].now);
-    })
-        .catch((err) => {
-        console.error("❌ Errore critico di connessione al database:");
-        console.error("Dettaglio:", err.message);
-        // Suggerimento utile nei log
-        if (!process.env.DATABASE_URL) {
-            console.error("👉 ATTENZIONE: La variabile DATABASE_URL non è definita su Render!");
-        }
+    // User login endpoint
+    app.post("/api/auth/login", async (request, reply) => {
+        return authController.login(request, reply);
     });
-    // Receipt processing endpoint
+    // User logout endpoint
+    app.post("/api/auth/logout", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return authController.logout(request, reply);
+    });
+    // Refresh access token endpoint (uses refresh token from body)
+    app.post("/api/auth/refresh", async (request, reply) => {
+        return authController.refreshToken(request, reply);
+    });
+    // Get user profile (protected route)
+    app.get("/api/auth/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return authController.getProfile(request, reply);
+    });
+    // ==================== BAR ENDPOINTS ====================
+    // Bar registration endpoint (protected route)
+    app.post("/api/bar/registration", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barController.register(request, reply);
+    });
+    // Get bar profile (protected route)
+    app.get("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barController.getBarByUser(request, reply);
+    });
+    // Public endpoint: list bars with coordinates for map preview
+    app.get("/api/bars", async (request, reply) => {
+        return barController.listBars(request, reply);
+    });
+    // ==================== RECEIPT ENDPOINTS ====================
+    // Receipt processing endpoint (OCR processing via Taggun)
     app.post("/api/receipts/process", async (request, reply) => {
-        try {
-            console.log("📸 Ricevuta richiesta di elaborazione ricevuta");
-            const data = await request.file();
-            if (!data) {
-                return reply.status(400).send({
-                    error: "Nessun file caricato",
-                    code: "MISSING_FILE",
-                });
-            }
-            const filename = data.filename || "receipt.jpg";
-            const extension = filename.toLowerCase().split(".").pop();
-            const isCompressible = ["jpg", "jpeg", "png"].includes(extension || "");
-            const MAX_INITIAL_SIZE = 20 * 1024 * 1024; // 20MB
-            // Leggi il file in chunks per controllare la dimensione
-            console.log("📖 Lettura file in progress...");
-            const chunks = [];
-            let totalSize = 0;
-            for await (const chunk of data.file) {
-                chunks.push(chunk);
-                totalSize += chunk.length;
-                // Se supera 20MB e non è compressibile, ferma subito
-                if (totalSize > MAX_INITIAL_SIZE && !isCompressible) {
-                    throw new Error("File troppo grande (>20MB) e non è un'immagine compressibile (JPG/PNG)");
-                }
-            }
-            let buffer = Buffer.concat(chunks);
-            console.log(`📦 Dimensione file originale: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
-            // Se il file supera 20MB e è un'immagine, comprimilo
-            if (buffer.length > MAX_INITIAL_SIZE && isCompressible) {
-                console.log("⚠️  File supera 20MB, compressione in corso...");
-                const { taggunService: tgService } = await import("./services/taggunService.js");
-                buffer = (await tgService["compressImage"](buffer, extension || "jpeg"));
-                console.log(`✅ Immagine compressa: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
-            }
-            console.log(`📁 File elaborato: ${filename} (${buffer.length} bytes)`);
-            // Importa il servizio Taggun
-            const { taggunService } = await import("./services/taggunService.js");
-            // Valida il file
-            await taggunService.validateImageFile(buffer, filename);
-            // Processa la ricevuta
-            const result = await taggunService.processReceipt(buffer, filename);
-            //TODO: aggiungere controllo sulla validità della ricevuta (es. partitaIVA che deve corrispondere a quelle del BAR, prezzo, data/orario, numeroDocumento, indirizzo etc.)
-            //TODO: aggiungere controllo su eventuali duplicati (check su DB)
-            //TODO: salvataggio della ricevuta sul DB
-            console.log("Result:", result);
-            console.log(`✅ Ricevuta elaborata con successo: ${result.merchantName || "Merchant sconosciuto"}`);
-            return reply.status(200).send({
-                success: true,
-                data: result,
-                message: "Ricevuta elaborata con successo",
-            });
-        }
-        catch (error) {
-            console.error("❌ Errore durante l'elaborazione della ricevuta:", error);
-            const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-            return reply.status(500).send({
-                success: false,
-                error: errorMessage,
-                code: "PROCESSING_ERROR",
-            });
-        }
+        return receiptsController.processReceipt(request, reply);
     });
-    // Receipt confirm endpoint
+    // Receipt confirm endpoint (save to database)
     app.post("/api/receipts/confirm", async (request, reply) => {
-        try {
-            const data = request.body;
-            console.log("📋 Ricevuta richiesta di conferma ricevuta");
-            console.log("Dati ricevuti:", data);
-            // Salva i dati della ricevuta nel database
-            // const receiptId = await databaseService.saveReceipt(data);
-            return reply.status(200).send({
-                status: "OK",
-                // receiptId: receiptId,
-                message: "Ricevuta salvata con successo",
-            });
-        }
-        catch (error) {
-            console.error("❌ Errore durante la conferma della ricevuta:", error);
-            const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-            return reply.status(500).send({
-                status: "ERROR",
-                error: errorMessage,
-            });
-        }
+        return receiptsController.confirmReceipt(request, reply);
     });
     // Graceful shutdown
     process.on("SIGTERM", async () => {
@@ -211,89 +122,90 @@ async function createServer() {
     });
     return app;
 }
-// Start the server
-async function startServer() {
-    try {
-        console.log("🔄 Inizializzazione server in corso...");
-        console.log("🔍 5. Creazione istanza server...");
-        let app;
-        try {
-            console.log("🔍 5.1 Creazione server in corso...");
-            app = await createServer();
-            console.log("✅ Server creato con successo");
-            // Inizializza il database
-            console.log("🔍 5.2 Inizializzazione database...");
-            await databaseService.initializeTables();
-            console.log("✅ Database inizializzato");
-            // Aggiungi un gestore per la radice
-            app.get("/", async (request, reply) => {
-                return {
-                    message: "Benvenuto nel server di Loyalty Bar",
-                    endpoints: {
-                        health: "/api/health",
-                        example: "/api/hello",
-                        receiptProcessing: "/api/receipts/process",
-                    },
-                };
-            });
-            console.log("🔍 6. Avvio server in ascolto...");
+// ==================== HELPER FUNCTIONS ====================
+/**
+ * Test database connection
+ */
+function testDatabaseConnection() {
+    const client = new Client({
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+    });
+    client
+        .connect()
+        .then(() => {
+        console.log("✅ Connessione al database OK");
+        return client.query("SELECT NOW()");
+    })
+        .then((res) => {
+        console.log(`📅 Database time: ${res.rows[0].now}`);
+        client.end();
+    })
+        .catch((err) => {
+        console.error("❌ Errore di connessione al database:", err.message);
+        if (!process.env.DATABASE_URL) {
+            console.error("⚠️  DATABASE_URL non definita");
         }
-        catch (error) {
-            console.error("❌ Errore durante la creazione del server:", error);
-            process.exit(1);
-        }
-        // Aggiungi un gestore per le richieste in entrata
-        app.addHook("onRequest", async (request, reply) => {
+    });
+}
+/**
+ * Setup request/response logging and error handling
+ */
+function setupHooks(app) {
+    if (CONFIG.nodeEnv === "development") {
+        app.addHook("onRequest", async (request) => {
             console.log(`📥 ${request.method} ${request.url}`);
         });
-        // Gestisce l'evento di avvio
-        app.addHook("onReady", () => {
-            console.log("✅ Server pronto!");
+    }
+    app.addHook("onError", (request, reply, error) => {
+        console.error(`❌ [${request.method} ${request.url}] ${error.message}`);
+    });
+}
+/**
+ * Start the Fastify server
+ */
+async function startServer() {
+    try {
+        console.log("🚀 Avvio server...");
+        // Create server instance
+        const app = await createServer();
+        console.log("✅ Server creato");
+        // Initialize database
+        await databaseService.initializeTables();
+        console.log("✅ Database inizializzato");
+        // Setup hooks
+        setupHooks(app);
+        // Start listening
+        const address = await app.listen({
+            port: CONFIG.port,
+            host: CONFIG.host,
         });
-        // Gestisce l'evento di errore
-        app.addHook("onError", (request, reply, error, done) => {
-            console.error("❌ Errore durante la richiesta:", error);
-            done();
-        });
-        console.log(`🔌 Tentativo di avvio su porta ${CONFIG.port}...`);
-        console.log(`🔍 7. Avvio server su ${CONFIG.host}:${CONFIG.port}...`);
-        let address;
-        // Avvia il server
-        console.log(`🔍 7. Tentativo di avvio su ${CONFIG.host}:${CONFIG.port}...`);
-        try {
-            address = await app.listen({
-                port: CONFIG.port,
-                host: CONFIG.host,
-            });
-            console.log(`✅ Server in ascolto su ${address}`);
-        }
-        catch (err) {
-            const error = err;
-            console.error("❌ Errore durante l'avvio del server:", error);
-            if (error.code === "EADDRINUSE") {
-                console.error(`⚠️  La porta ${CONFIG.port} è già in uso!`);
-            }
-            process.exit(1);
-        }
-        console.log(`\n🎉 Server avviato con successo!`);
-        console.log(`🌐 URL: ${CONFIG.host}:${CONFIG.port}`);
+        console.log(`\n✨ Server pronto!`);
+        console.log(`🌐 ${address}`);
+        console.log(`🔧 Ambiente: ${CONFIG.nodeEnv}\n`);
         return app;
     }
     catch (err) {
-        console.error("Error starting server:", err);
+        const error = err;
+        if (error.code === "EADDRINUSE") {
+            console.error(`❌ Porta ${CONFIG.port} già in uso`);
+        }
+        else {
+            console.error("❌ Errore durante l'avvio:", error.message);
+        }
         process.exit(1);
     }
 }
-// Esporta le funzioni e la configurazione
+// ==================== EXPORTS ====================
 export { createServer, startServer, CONFIG };
-// Avvia il server solo se il file viene eseguito direttamente
-// e non quando viene importato come modulo
+// ==================== STARTUP ====================
+// Start server if this file is executed directly
 const isMain = import.meta.url.endsWith("index.ts") ||
-    (process.argv[1] && process.argv[1].endsWith("index.ts"));
+    import.meta.url.endsWith("index.js") ||
+    (process.argv[1] && (process.argv[1].endsWith("index.ts") || process.argv[1].endsWith("index.js")));
 if (isMain) {
-    console.log("🚀 Avvio del server...");
     startServer().catch((err) => {
-        console.error("❌ Errore durante l'avvio del server:", err);
+        console.error("❌ Errore critico:", err.message);
         process.exit(1);
     });
 }

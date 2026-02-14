@@ -7,6 +7,21 @@ import {
 import { saveAndOptimizeImage, isPngFile, isFileSizeValid } from "../utils/imageUpload.js";
 
 /**
+ * Interfaccia per la risposta di Google Geocoding
+ */
+interface GoogleGeocodeResponse {
+  status: string;
+  results: Array<{
+    geometry: {
+      location: {
+        lat: number;
+        lng: number;
+      };
+    };
+  }>;
+}
+
+/**
  * Bar Controller
  * Gestisce la logica di registrazione e operazioni correlate ai bar
  */
@@ -38,12 +53,9 @@ export class BarController {
       const parts = request.parts();
       for await (const part of parts) {
         if (part.type === "field") {
-          // Campo testo - leggi il valore
           data[part.fieldname] = part.value as string;
         } else if (part.type === "file") {
-          // File
           if (part.fieldname === "coverImage") {
-            // Leggi il file dallo stream
             const chunks: Buffer[] = [];
             for await (const chunk of part.file) {
               chunks.push(chunk as Buffer);
@@ -129,7 +141,7 @@ export class BarController {
         });
       }
 
-      // Prova a geocodificare l'indirizzo se è disponibile una API key
+      // Prova a geocodificare l'indirizzo
       let latitude: number | null = null;
       let longitude: number | null = null;
       try {
@@ -138,8 +150,11 @@ export class BarController {
           const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
             input.address
           )}&key=${apiKey}`;
+          
           const geoResp = await fetch(geocodeUrl);
-          const geoJson = await geoResp.json();
+          // Cast esplicito per risolvere l'errore TS18046 (unknown)
+          const geoJson = (await geoResp.json()) as GoogleGeocodeResponse;
+
           if (geoJson.status === 'OK' && geoJson.results && geoJson.results[0]) {
             const loc = geoJson.results[0].geometry.location;
             latitude = Number(loc.lat);
@@ -153,7 +168,7 @@ export class BarController {
         console.warn('⚠️ Errore durante la geocodifica:', err);
       }
 
-      // Salva il bar nel database (includendo lat/lng se presenti)
+      // Salva il bar nel database
       const barId = await barRepository.createBar({
         userId,
         piva: input.piva,
@@ -184,9 +199,7 @@ export class BarController {
       });
     } catch (error) {
       console.error("❌ Errore durante la registrazione del bar:", error);
-
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-
       return reply.status(500).send({
         success: false,
         error: errorMessage,
@@ -200,26 +213,14 @@ export class BarController {
    */
   async getBarByUser(request: FastifyRequest, reply: FastifyReply) {
     try {
-      console.log("🏪 Ricevuta richiesta di recupero bar per utente");
-
-      // Estrai userId dal middleware di autenticazione
       const userId = (request as any).userId;
       if (!userId) {
-        return reply.status(401).send({
-          success: false,
-          error: "Non autenticato",
-          code: "UNAUTHORIZED",
-        });
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      // Recupera il bar dell'utente
       const bar = await barRepository.findByUserId(userId);
       if (!bar) {
-        return reply.status(404).send({
-          success: false,
-          message: "Bar non trovato",
-          code: "BAR_NOT_FOUND",
-        });
+        return reply.status(404).send({ success: false, message: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
 
       return reply.status(200).send({
@@ -236,31 +237,22 @@ export class BarController {
         },
       });
     } catch (error) {
-      console.error("❌ Errore durante il recupero del bar:", error);
-
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-
-      return reply.status(500).send({
-        success: false,
-        error: errorMessage,
-        code: "RETRIEVAL_ERROR",
-      });
+      return reply.status(500).send({ success: false, error: errorMessage, code: "RETRIEVAL_ERROR" });
     }
   }
 
   /**
-   * Lista tutti i bar con coordinate per la mappa
+   * Lista tutti i bar
    */
   async listBars(request: FastifyRequest, reply: FastifyReply) {
     try {
       const bars = await barRepository.getAllBars();
       return reply.status(200).send({ success: true, data: bars });
     } catch (error) {
-      console.error('❌ Errore durante il recupero lista bar:', error);
       return reply.status(500).send({ success: false, error: 'Errore nel recupero dei bar' });
     }
   }
 }
 
-// Singleton instance
 export const barController = new BarController();
