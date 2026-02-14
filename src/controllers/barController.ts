@@ -5,7 +5,6 @@ import {
   type BarRegistrationInput,
 } from "../validators/barValidator.js";
 import { saveAndOptimizeImage, isPngFile, isFileSizeValid } from "../utils/imageUpload.js";
-import fetch from 'node-fetch';
 
 /**
  * Bar Controller
