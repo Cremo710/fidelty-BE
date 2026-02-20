@@ -108,15 +108,30 @@ export class BarRepository {
    */
   async getAllBars(): Promise<Array<{
     id: number;
+    user_id: number;
+    iva: string;
     name: string;
     merchant_name: string;
     address: string;
     image: string | null;
-    latitude: number | null;
-    longitude: number | null;
+    created_at: Date;
+    updated_at: Date;
   }>> {
     try {
-      const query = `SELECT id, name, merchant_name, address, image, latitude, longitude FROM bars WHERE latitude IS NOT NULL AND longitude IS NOT NULL`;
+      const query = `
+        SELECT
+          id,
+          user_id,
+          iva,
+          merchant_name,
+          name,
+          address,
+          image,
+          created_at,
+          updated_at
+        FROM bars
+        ORDER BY id ASC
+      `;
       const result = await databaseService.getPool().query(query);
       return result.rows || [];
     } catch (error) {
