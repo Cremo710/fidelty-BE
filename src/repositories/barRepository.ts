@@ -19,6 +19,23 @@ export interface BarDTO {
  * Astrae la logica di interazione con il database
  */
 export class BarRepository {
+  private async hasGeoColumns(): Promise<boolean> {
+    try {
+      const query = `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'bars'
+          AND column_name IN ('latitude', 'longitude')
+      `;
+      const result = await databaseService.getPool().query(query);
+      const columns = new Set(result.rows.map((row: any) => row.column_name));
+      return columns.has("latitude") && columns.has("longitude");
+    } catch (error) {
+      console.warn("⚠️ Impossibile verificare colonne geografiche bars:", error);
+      return false;
+    }
+  }
+
   /**
    * Salva un nuovo bar nel database
    * @param bar - Dati del bar {userId, piva, merchantName, name, address, image}
@@ -134,6 +151,8 @@ export class BarRepository {
     updated_at: Date;
   }>> {
     try {
+      const includeGeoColumns = await this.hasGeoColumns();
+
       const query = `
         SELECT
           id,
@@ -143,8 +162,8 @@ export class BarRepository {
           name,
           address,
           image,
-          latitude,
-          longitude,
+          ${includeGeoColumns ? "latitude" : "NULL::double precision AS latitude"},
+          ${includeGeoColumns ? "longitude" : "NULL::double precision AS longitude"},
           created_at,
           updated_at
         FROM bars

@@ -26,6 +26,35 @@ interface GoogleGeocodeResponse {
  * Gestisce la logica di registrazione e operazioni correlate ai bar
  */
 export class BarController {
+  private async geocodeAddress(address: string): Promise<{ latitude: number; longitude: number } | null> {
+    try {
+      const apiKey = process.env.GOOGLE_GEOCODE_API_KEY;
+      if (!apiKey || !address) {
+        return null;
+      }
+
+      const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
+        address
+      )}&key=${apiKey}`;
+
+      const geoResp = await fetch(geocodeUrl);
+      const geoJson = (await geoResp.json()) as GoogleGeocodeResponse;
+
+      if (geoJson.status !== "OK" || !geoJson.results || !geoJson.results[0]) {
+        return null;
+      }
+
+      const location = geoJson.results[0].geometry.location;
+      return {
+        latitude: Number(location.lat),
+        longitude: Number(location.lng),
+      };
+    } catch (error) {
+      console.warn("⚠️ Geocoding fallito per indirizzo bar:", error);
+      return null;
+    }
+  }
+
   /**
    * Handler per la registrazione di un nuovo bar
    */
@@ -248,7 +277,33 @@ export class BarController {
   async listBars(request: FastifyRequest, reply: FastifyReply) {
     try {
       const bars = await barRepository.getAllBars();
-      return reply.status(200).send({ success: true, data: bars });
+
+      const enrichedBars = await Promise.all(
+        bars.map(async (bar) => {
+          const hasCoordinates =
+            bar.latitude !== null &&
+            bar.longitude !== null &&
+            Number.isFinite(Number(bar.latitude)) &&
+            Number.isFinite(Number(bar.longitude));
+
+          if (hasCoordinates) {
+            return {
+              ...bar,
+              latitude: Number(bar.latitude),
+              longitude: Number(bar.longitude),
+            };
+          }
+
+          const geocoded = await this.geocodeAddress(bar.address);
+          return {
+            ...bar,
+            latitude: geocoded?.latitude ?? null,
+            longitude: geocoded?.longitude ?? null,
+          };
+        })
+      );
+
+      return reply.status(200).send({ success: true, data: enrichedBars });
     } catch (error) {
       return reply.status(500).send({ success: false, error: 'Errore nel recupero dei bar' });
     }
