@@ -128,6 +128,8 @@ export class BarRepository {
     merchant_name: string;
     address: string;
     image: string | null;
+    latitude: number | null;
+    longitude: number | null;
     created_at: Date;
     updated_at: Date;
   }>> {
@@ -141,6 +143,8 @@ export class BarRepository {
           name,
           address,
           image,
+          latitude,
+          longitude,
           created_at,
           updated_at
         FROM bars
