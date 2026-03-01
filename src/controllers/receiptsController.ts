@@ -1,5 +1,30 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { databaseService } from "../services/databaseService.js";
+import { barRepository } from "../repositories/barRepository.js";
+
+function normalizeVatNumber(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const cleaned = value.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function computeEarnedPoints(amount: unknown, hasMatchedBar: boolean): number {
+  if (!hasMatchedBar) {
+    return 0;
+  }
+
+  const numericAmount =
+    typeof amount === "number" ? amount : Number.parseFloat(String(amount || "0"));
+
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return 0;
+  }
+
+  return Math.max(1, Math.round(numericAmount));
+}
 
 /**
  * Receipts Controller
@@ -116,18 +141,47 @@ class ReceiptsController {
    */
   async confirmReceipt(request: FastifyRequest, reply: FastifyReply) {
     try {
-      const data = request.body;
+      const userId = request.userId;
+      if (!userId) {
+        return reply.status(401).send({
+          status: "ERROR",
+          error: "Utente non autenticato",
+          code: "UNAUTHORIZED",
+        });
+      }
+
+      const data = (request.body || {}) as Record<string, unknown>;
 
       console.log("📋 Ricevuta richiesta di conferma ricevuta");
       console.log("Dati ricevuti:", data);
 
+      const normalizedPiva = normalizeVatNumber(data.pIva);
+      const matchedBar = normalizedPiva
+        ? await barRepository.findByPiva(normalizedPiva)
+        : null;
+      const pointsEarned = computeEarnedPoints(data.billAmount, Boolean(matchedBar));
+
+      const payload = {
+        ...data,
+        pIva: normalizedPiva,
+        userId,
+        barId: matchedBar?.id || null,
+        pointsEarned,
+      };
+
       // Salva i dati della ricevuta nel database
-      const receiptId = await databaseService.saveReceipt(data);
+      const receiptId = await databaseService.saveReceipt(payload);
 
       return reply.status(200).send({
         status: "OK",
         receiptId: receiptId,
         message: "Ricevuta salvata con successo",
+        data: {
+          matchedBar: Boolean(matchedBar),
+          barId: matchedBar?.id || null,
+          barName: matchedBar?.name || null,
+          pointsEarned,
+        },
       });
     } catch (error) {
       console.error("❌ Errore durante la conferma della ricevuta:", error);
@@ -138,6 +192,47 @@ class ReceiptsController {
       return reply.status(500).send({
         status: "ERROR",
         error: errorMessage,
+      });
+    }
+  }
+
+  async getMyLoyaltyCards(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = request.userId;
+      if (!userId) {
+        return reply.status(401).send({
+          success: false,
+          error: "Utente non autenticato",
+          code: "UNAUTHORIZED",
+        });
+      }
+
+      const cards = await databaseService.getUserLoyaltyCards(userId);
+
+      const mappedCards = cards.map((card) => ({
+        id: card.barId,
+        barId: card.barId,
+        title: card.barName,
+        merchantName: card.merchantName,
+        piva: card.piva,
+        image: card.coverImage,
+        points: card.totalPoints,
+        receiptsCount: card.receiptsCount,
+        status: card.totalPoints >= 500 ? "VIP" : "MEMBER",
+        lastReceiptAt: card.lastReceiptAt,
+      }));
+
+      return reply.status(200).send({
+        success: true,
+        data: mappedCards,
+      });
+    } catch (error) {
+      console.error("❌ Errore durante il recupero delle tessere:", error);
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({
+        success: false,
+        error: errorMessage,
+        code: "CARDS_FETCH_ERROR",
       });
     }
   }

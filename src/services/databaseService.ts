@@ -86,6 +86,13 @@ export class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_bars_user_id ON bars(user_id);
       CREATE INDEX IF NOT EXISTS idx_bars_iva ON bars(iva);
+
+      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES utenti(id) ON DELETE SET NULL;
+      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS bar_id INTEGER REFERENCES bars(id) ON DELETE SET NULL;
+      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS points_earned INTEGER NOT NULL DEFAULT 0;
+
+      CREATE INDEX IF NOT EXISTS idx_receipts_user_id ON receipts(user_id);
+      CREATE INDEX IF NOT EXISTS idx_receipts_bar_id ON receipts(bar_id);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
@@ -157,6 +164,9 @@ export class DatabaseService {
       const insertReceiptQuery = `
       INSERT INTO receipts (
         doc_id,
+        user_id,
+        bar_id,
+        points_earned,
         merchant_name,
         merchant_address,
         merchant_tax_id,
@@ -164,23 +174,34 @@ export class DatabaseService {
         purchase_date,
         line_items,
         updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
       ON CONFLICT (doc_id) DO UPDATE SET
+        user_id = EXCLUDED.user_id,
+        bar_id = EXCLUDED.bar_id,
+        points_earned = EXCLUDED.points_earned,
         merchant_name = EXCLUDED.merchant_name,
         total_amount = EXCLUDED.total_amount,
         updated_at = CURRENT_TIMESTAMP
       RETURNING id
     `;
 
+      const parsedBillAmount =
+        typeof receiptData.billAmount === "number"
+          ? receiptData.billAmount
+          : Number.parseFloat(receiptData.billAmount || "0");
+
       // Mapping dei tuoi dati verso le colonne del DB
       const receiptValues = [
         docId, // $1: doc_id
-        receiptData.merchantName || "Sconosciuto", // $2: merchant_name
-        receiptData.merchantAddress || null, // $3: merchant_address
-        receiptData.pIva || null, // $4: merchant_tax_id (pIva)
-        receiptData.billAmount || 0, // $5: total_amount
-        receiptData.billDate || null, // $6: purchase_date
-        JSON.stringify(receiptData.lineItems || []), // $7: line_items (come stringa JSON)
+        receiptData.userId || null, // $2: user_id
+        receiptData.barId || null, // $3: bar_id
+        receiptData.pointsEarned || 0, // $4: points_earned
+        receiptData.merchantName || "Sconosciuto", // $5: merchant_name
+        receiptData.merchantAddress || null, // $6: merchant_address
+        receiptData.pIva || null, // $7: merchant_tax_id (pIva)
+        Number.isFinite(parsedBillAmount) ? parsedBillAmount : 0, // $8: total_amount
+        receiptData.billDate || null, // $9: purchase_date
+        JSON.stringify(receiptData.lineItems || []), // $10: line_items (come stringa JSON)
       ];
 
       const receiptResult = await client.query(
@@ -221,6 +242,53 @@ export class DatabaseService {
     } finally {
       // IMPORTANTE: Rilascia sempre il client al pool
       client.release();
+    }
+  }
+
+  async getUserLoyaltyCards(userId: number): Promise<Array<{
+    barId: number;
+    barName: string;
+    merchantName: string;
+    piva: string;
+    coverImage: string | null;
+    totalPoints: number;
+    receiptsCount: number;
+    lastReceiptAt: Date;
+  }>> {
+    try {
+      const query = `
+        SELECT
+          b.id AS bar_id,
+          b.name AS bar_name,
+          b.merchant_name,
+          b.iva AS piva,
+          b.image AS cover_image,
+          COALESCE(SUM(r.points_earned), 0)::int AS total_points,
+          COUNT(r.id)::int AS receipts_count,
+          MAX(r.created_at) AS last_receipt_at
+        FROM receipts r
+        INNER JOIN bars b ON b.id = r.bar_id
+        WHERE r.user_id = $1
+          AND r.points_earned > 0
+        GROUP BY b.id, b.name, b.merchant_name, b.iva, b.image
+        ORDER BY MAX(r.created_at) DESC
+      `;
+
+      const result = await this.pool.query(query, [userId]);
+
+      return result.rows.map((row: any) => ({
+        barId: row.bar_id,
+        barName: row.bar_name,
+        merchantName: row.merchant_name,
+        piva: row.piva,
+        coverImage: row.cover_image,
+        totalPoints: Number(row.total_points) || 0,
+        receiptsCount: Number(row.receipts_count) || 0,
+        lastReceiptAt: row.last_receipt_at,
+      }));
+    } catch (error) {
+      console.error("❌ Errore durante il recupero delle tessere utente:", error);
+      throw error;
     }
   }
 

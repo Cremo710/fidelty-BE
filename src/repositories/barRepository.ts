@@ -104,6 +104,20 @@ export class BarRepository {
   }
 
   /**
+   * Recupera un bar per partita IVA
+   */
+  async findByPiva(piva: string): Promise<BarDTO | null> {
+    try {
+      const query = "SELECT * FROM bars WHERE iva = $1 LIMIT 1";
+      const result = await databaseService.getPool().query(query, [piva]);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error("❌ Errore durante il recupero del bar per P.IVA:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Recupera tutti i bar con lat/lng per mappa
    */
   async getAllBars(): Promise<Array<{

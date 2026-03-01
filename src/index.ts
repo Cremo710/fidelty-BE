@@ -144,8 +144,13 @@ async function createServer(): Promise<FastifyInstance> {
   });
 
   // Receipt confirm endpoint (save to database)
-  app.post("/api/receipts/confirm", async (request, reply) => {
+  app.post("/api/receipts/confirm", { onRequest: [authenticateToken] }, async (request, reply) => {
     return receiptsController.confirmReceipt(request, reply);
+  });
+
+  // Loyalty cards endpoint for authenticated user
+  app.get("/api/receipts/my-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return receiptsController.getMyLoyaltyCards(request, reply);
   });
 
   // Graceful shutdown
