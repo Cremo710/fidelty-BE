@@ -7,6 +7,7 @@ import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
 import { receiptsController } from "./controllers/receiptsController.js";
 import { barController } from "./controllers/barController.js";
+import { loyaltyCardRepository } from "./repositories/loyaltyCardRepository.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 
@@ -151,6 +152,24 @@ async function createServer(): Promise<FastifyInstance> {
   // Loyalty cards endpoint for authenticated user
   app.get("/api/receipts/my-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
     return receiptsController.getMyLoyaltyCards(request, reply);
+  });
+
+  // ==================== ADMIN ENDPOINTS ====================
+
+  // One-shot backfill: popola loyalty_cards dagli scontrini esistenti
+  // Protetto da auth — rimuovere dopo il primo utilizzo
+  app.post("/api/admin/backfill-loyalty-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
+    try {
+      const count = await loyaltyCardRepository.backfillFromReceipts();
+      return reply.status(200).send({
+        success: true,
+        message: `Backfill completato: ${count} carte fedeltà create/aggiornate`,
+        count,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: msg });
+    }
   });
 
   // Graceful shutdown
