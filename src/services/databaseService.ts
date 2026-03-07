@@ -1,6 +1,8 @@
 import pkg from "pg";
 const { Pool } = pkg;
 
+import { loyaltyCardRepository } from "../repositories/loyaltyCardRepository.js";
+
 export class DatabaseService {
   private pool: pkg.Pool;
 
@@ -93,6 +95,22 @@ export class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_receipts_user_id ON receipts(user_id);
       CREATE INDEX IF NOT EXISTS idx_receipts_bar_id ON receipts(bar_id);
+
+      -- Tabella carte fedeltà (persistite, non più calcolate a runtime)
+      CREATE TABLE IF NOT EXISTS loyalty_cards (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        bar_id INTEGER NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
+        points INTEGER NOT NULL DEFAULT 0,
+        receipts_count INTEGER NOT NULL DEFAULT 0,
+        last_receipt_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, bar_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_loyalty_cards_user_id ON loyalty_cards(user_id);
+      CREATE INDEX IF NOT EXISTS idx_loyalty_cards_bar_id ON loyalty_cards(bar_id);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
@@ -227,6 +245,17 @@ export class DatabaseService {
         }
       }
 
+      // Upsert loyalty card nella stessa transazione (atomico, no race condition)
+      if (receiptData.userId && receiptData.barId && receiptData.pointsEarned > 0) {
+        const cardId = await loyaltyCardRepository.upsertCardInTransaction(
+          client,
+          receiptData.userId,
+          receiptData.barId,
+          receiptData.pointsEarned,
+        );
+        console.log(`🃏 Loyalty card aggiornata (id=${cardId}) per userId=${receiptData.userId}, barId=${receiptData.barId}, +${receiptData.pointsEarned} punti`);
+      }
+
       await client.query("COMMIT");
       console.log(
         `✅ Ricevuta ${docId} salvata correttamente con ID interno: ${receiptId}`,
@@ -256,41 +285,19 @@ export class DatabaseService {
     lastReceiptAt: Date;
   }>> {
     try {
-      // Debug: verifica cosa esiste a DB per questo utente
-      const debugResult = await this.pool.query(
-        `SELECT id, user_id, bar_id, points_earned, merchant_name FROM receipts WHERE user_id = $1`,
-        [userId]
-      );
-      console.log(`🔍 Ricevute trovate per userId=${userId}:`, debugResult.rows);
+      // Lettura diretta dalla tabella loyalty_cards (no GROUP BY su receipts)
+      const cards = await loyaltyCardRepository.findByUserId(userId);
+      console.log(`🃏 Trovate ${cards.length} carte fedeltà da loyalty_cards per userId=${userId}`);
 
-      const query = `
-        SELECT
-          b.id AS bar_id,
-          b.name AS bar_name,
-          b.merchant_name,
-          b.iva AS piva,
-          b.image AS cover_image,
-          COALESCE(SUM(r.points_earned), 0)::int AS total_points,
-          COUNT(r.id)::int AS receipts_count,
-          MAX(r.created_at) AS last_receipt_at
-        FROM receipts r
-        INNER JOIN bars b ON b.id = r.bar_id
-        WHERE r.user_id = $1
-        GROUP BY b.id, b.name, b.merchant_name, b.iva, b.image
-        ORDER BY MAX(r.created_at) DESC
-      `;
-
-      const result = await this.pool.query(query, [userId]);
-
-      return result.rows.map((row: any) => ({
-        barId: row.bar_id,
-        barName: row.bar_name,
-        merchantName: row.merchant_name,
-        piva: row.piva,
-        coverImage: row.cover_image,
-        totalPoints: Number(row.total_points) || 0,
-        receiptsCount: Number(row.receipts_count) || 0,
-        lastReceiptAt: row.last_receipt_at,
+      return cards.map((card) => ({
+        barId: card.barId,
+        barName: card.barName,
+        merchantName: card.merchantName,
+        piva: card.piva,
+        coverImage: card.coverImage,
+        totalPoints: card.totalPoints,
+        receiptsCount: card.receiptsCount,
+        lastReceiptAt: card.lastReceiptAt as unknown as Date,
       }));
     } catch (error) {
       console.error("❌ Errore durante il recupero delle tessere utente:", error);

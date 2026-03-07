@@ -14,7 +14,8 @@
     "dev": "cross-env NODE_ENV=development tsx watch src/index.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,json}\"",
-    "test": "vitest"
+    "test": "vitest",
+    "backfill:loyalty-cards": "tsx src/migrations/backfillLoyaltyCards.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
