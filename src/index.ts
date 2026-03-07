@@ -154,24 +154,6 @@ async function createServer(): Promise<FastifyInstance> {
     return receiptsController.getMyLoyaltyCards(request, reply);
   });
 
-  // ==================== ADMIN ENDPOINTS ====================
-
-  // One-shot backfill: popola loyalty_cards dagli scontrini esistenti
-  // Protetto da auth — rimuovere dopo il primo utilizzo
-  app.post("/api/admin/backfill-loyalty-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
-    try {
-      const count = await loyaltyCardRepository.backfillFromReceipts();
-      return reply.status(200).send({
-        success: true,
-        message: `Backfill completato: ${count} carte fedeltà create/aggiornate`,
-        count,
-      });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: msg });
-    }
-  });
-
   // Graceful shutdown
   process.on("SIGTERM", async () => {
     app.log.info("SIGTERM signal received: closing HTTP server");
@@ -240,6 +222,13 @@ async function startServer(): Promise<FastifyInstance> {
     // Initialize database
     await databaseService.initializeTables();
     console.log("✅ Database inizializzato");
+
+    // Backfill loyalty_cards dagli scontrini esistenti (idempotente, sicuro ad ogni avvio)
+    try {
+      await loyaltyCardRepository.backfillFromReceipts();
+    } catch (err) {
+      console.warn("⚠️ Backfill loyalty_cards fallito (non bloccante):", err);
+    }
 
     // Setup hooks
     setupHooks(app);
