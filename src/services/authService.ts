@@ -2,7 +2,7 @@ import { hash, verify } from "argon2";
 import jwt, { SignOptions, JwtPayload } from "jsonwebtoken";
 
 interface JWTPayload {
-  userId: number;
+  userId: string;
   email: string;
   type?: "access" | "refresh";
   iat?: number;
@@ -71,7 +71,7 @@ export class AuthService {
    * @param expiresIn - Durata token (default 15m per access token)
    * @returns JWT token firmato
    */
-  generateToken(userId: number, email: string, expiresIn: string = "15m"): string {
+  generateToken(userId: string, email: string, expiresIn: string = "15m"): string {
     try {
       const payload: JWTPayload = {
         userId,
@@ -98,7 +98,7 @@ export class AuthService {
    * @param email - Email dell'utente
    * @returns Refresh token firmato
    */
-  generateRefreshToken(userId: number, email: string, expiresIn: string = "7d"): string {
+  generateRefreshToken(userId: string, email: string, expiresIn: string = "7d"): string {
     try {
       const payload: JWTPayload = {
         userId,

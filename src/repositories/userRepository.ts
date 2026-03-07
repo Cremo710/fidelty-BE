@@ -1,7 +1,9 @@
 import { databaseService } from "../services/databaseService.js";
+import { ulid } from "ulid";
 
 export interface UserDTO {
-  id: number;
+  id: string;
+  public_id: string;
   name: string;
   email: string;
   password: string;
@@ -23,15 +25,17 @@ export class UserRepository {
     name: string;
     email: string;
     password: string;
-  }): Promise<number> {
+  }): Promise<string> {
     const client = await databaseService.getPool().connect();
 
     try {
       await client.query("BEGIN");
 
+      const id = ulid();
+      const publicId = await this.generateUniquePublicId(client);
       const query = `
-        INSERT INTO utenti (name, email, password, updated_at)
-        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        INSERT INTO utenti (id, public_id, name, email, password, updated_at)
+        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
         ON CONFLICT (email) DO UPDATE SET
           name = EXCLUDED.name,
           password = EXCLUDED.password,
@@ -39,9 +43,9 @@ export class UserRepository {
         RETURNING id
       `;
 
-      const values = [user.name, user.email, user.password];
+      const values = [id, publicId, user.name, user.email, user.password];
       const result = await client.query(query, values);
-      const userId = result.rows[0].id;
+      const userId: string = result.rows[0].id;
 
       await client.query("COMMIT");
       console.log(`✅ Utente creato/aggiornato con ID: ${userId}`);
@@ -76,7 +80,7 @@ export class UserRepository {
    * @param id - ID dell'utente
    * @returns Dati dell'utente oppure null
    */
-  async findById(id: number): Promise<UserDTO | null> {
+  async findById(id: string): Promise<UserDTO | null> {
     try {
       const query = "SELECT * FROM utenti WHERE id = $1";
       const result = await databaseService.getPool().query(query, [id]);
@@ -109,7 +113,7 @@ export class UserRepository {
    * @param updates - Campi da aggiornare
    * @returns true se l'aggiornamento è stato effettuato
    */
-  async updateUser(id: number, updates: Partial<UserDTO>): Promise<boolean> {
+  async updateUser(id: string, updates: Partial<UserDTO>): Promise<boolean> {
     const client = await databaseService.getPool().connect();
 
     try {
@@ -159,7 +163,7 @@ export class UserRepository {
    * @param id - ID dell'utente
    * @returns true se l'eliminazione è stata effettuata
    */
-  async deleteUser(id: number): Promise<boolean> {
+  async deleteUser(id: string): Promise<boolean> {
     try {
       const query = "DELETE FROM utenti WHERE id = $1 RETURNING id";
       const result = await databaseService.getPool().query(query, [id]);
@@ -174,7 +178,7 @@ export class UserRepository {
    * Salva un refresh token nel database
    */
   async saveRefreshToken(
-    userId: number,
+    userId: string,
     token: string,
     expiresAt: Date
   ): Promise<void> {
@@ -234,7 +238,7 @@ export class UserRepository {
   /**
    * Revoca tutti i refresh token di un utente (logout da tutti i dispositivi)
    */
-  async revokeAllUserTokens(userId: number): Promise<void> {
+  async revokeAllUserTokens(userId: string): Promise<void> {
     const query = `
       UPDATE refresh_tokens
       SET revoked = true
@@ -247,6 +251,86 @@ export class UserRepository {
     } catch (error) {
       console.error("Errore nella revoca dei refresh token:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Cerca un utente per public_id (es. FU-AB12C)
+   * @param publicId - Il codice pubblico dell'utente
+   * @returns Dati dell'utente oppure null
+   */
+  async findByPublicId(publicId: string): Promise<UserDTO | null> {
+    try {
+      const query = "SELECT * FROM utenti WHERE public_id = $1";
+      const result = await databaseService.getPool().query(query, [publicId.toUpperCase()]);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error("❌ Errore durante il recupero dell'utente per public_id:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Genera un public_id unico nel formato FU-XXXXX (5 caratteri alfanumerici)
+   * Ritenta fino a 10 volte in caso di collisione.
+   */
+  private async generateUniquePublicId(client: any): Promise<string> {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const MAX_ATTEMPTS = 10;
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      let code = "FU-";
+      for (let i = 0; i < 5; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      const check = await client.query(
+        "SELECT 1 FROM utenti WHERE public_id = $1 LIMIT 1",
+        [code],
+      );
+      if (check.rows.length === 0) return code;
+    }
+
+    throw new Error("Impossibile generare un public_id unico dopo 10 tentativi");
+  }
+
+  /**
+   * Backfill: genera public_id per tutti gli utenti che non ne hanno uno.
+   * Idempotente e sicuro da eseguire ad ogni avvio del server.
+   */
+  async backfillPublicIds(): Promise<number> {
+    const client = await databaseService.getPool().connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const result = await client.query(
+        "SELECT id FROM utenti WHERE public_id IS NULL ORDER BY created_at"
+      );
+
+      if (result.rows.length === 0) {
+        await client.query("COMMIT");
+        return 0;
+      }
+
+      let updated = 0;
+      for (const row of result.rows) {
+        const publicId = await this.generateUniquePublicId(client);
+        await client.query(
+          "UPDATE utenti SET public_id = $1 WHERE id = $2",
+          [publicId, row.id]
+        );
+        updated++;
+      }
+
+      await client.query("COMMIT");
+      console.log(`✅ Backfill public_id completato: ${updated} utenti aggiornati`);
+      return updated;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("❌ Errore durante il backfill dei public_id:", error);
+      throw error;
+    } finally {
+      client.release();
     }
   }
 }

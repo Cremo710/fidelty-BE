@@ -5,7 +5,7 @@ import { getAuthService } from "../services/authService.js";
 declare global {
   namespace FastifyRequest {
     interface FastifyRequest {
-      userId?: number;
+      userId?: string;
       userEmail?: string;
     }
   }
@@ -14,7 +14,7 @@ declare global {
 // Alternative: estendi FastifyRequest come type module augmentation
 declare module "fastify" {
   interface FastifyRequest {
-    userId?: number;
+    userId?: string;
     userEmail?: string;
   }
 }

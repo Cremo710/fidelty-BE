@@ -1,5 +1,6 @@
 import pkg from "pg";
 const { Pool } = pkg;
+import { ulid } from "ulid";
 
 import { loyaltyCardRepository } from "../repositories/loyaltyCardRepository.js";
 
@@ -48,7 +49,7 @@ export class DatabaseService {
       
       -- Tabella utenti
       CREATE TABLE IF NOT EXISTS utenti (
-        id SERIAL PRIMARY KEY,
+        id VARCHAR(26) PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
         password TEXT NOT NULL,
@@ -58,10 +59,13 @@ export class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_utenti_email ON utenti(email);
 
+      ALTER TABLE utenti ADD COLUMN IF NOT EXISTS public_id VARCHAR(8) UNIQUE;
+      CREATE INDEX IF NOT EXISTS idx_utenti_public_id ON utenti(public_id);
+
       -- Tabella per il refresh token (per future implementazioni)
       CREATE TABLE IF NOT EXISTS refresh_tokens (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
         token TEXT UNIQUE NOT NULL,
         expires_at TIMESTAMP NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -73,8 +77,8 @@ export class DatabaseService {
 
       -- Tabella per i bar registrati
       CREATE TABLE IF NOT EXISTS bars (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        id VARCHAR(26) PRIMARY KEY,
+        user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
         iva VARCHAR(20) UNIQUE NOT NULL,
         merchant_name VARCHAR(255) NOT NULL,
         name VARCHAR(255) NOT NULL,
@@ -89,8 +93,8 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_bars_user_id ON bars(user_id);
       CREATE INDEX IF NOT EXISTS idx_bars_iva ON bars(iva);
 
-      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES utenti(id) ON DELETE SET NULL;
-      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS bar_id INTEGER REFERENCES bars(id) ON DELETE SET NULL;
+      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS user_id VARCHAR(26) REFERENCES utenti(id) ON DELETE SET NULL;
+      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS bar_id VARCHAR(26) REFERENCES bars(id) ON DELETE SET NULL;
       ALTER TABLE receipts ADD COLUMN IF NOT EXISTS points_earned INTEGER NOT NULL DEFAULT 0;
 
       CREATE INDEX IF NOT EXISTS idx_receipts_user_id ON receipts(user_id);
@@ -99,8 +103,8 @@ export class DatabaseService {
       -- Tabella carte fedeltà (persistite, non più calcolate a runtime)
       CREATE TABLE IF NOT EXISTS loyalty_cards (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
-        bar_id INTEGER NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
+        user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        bar_id VARCHAR(26) NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
         points INTEGER NOT NULL DEFAULT 0,
         receipts_count INTEGER NOT NULL DEFAULT 0,
         last_receipt_at TIMESTAMP,
@@ -122,15 +126,17 @@ export class DatabaseService {
     }
   }
 
-  async saveUser(userData: { name: string; email: string; password: string }): Promise<number> {
+  async saveUser(userData: { name: string; email: string; password: string }): Promise<string> {
     const client = await this.pool.connect();
 
     try {
       await client.query("BEGIN");
 
+      const id = ulid();
+      const publicId = await this.generateUniquePublicId(client);
       const insertUserQuery = `
-      INSERT INTO utenti (name, email, password, updated_at)
-      VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+      INSERT INTO utenti (id, public_id, name, email, password, updated_at)
+      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
       ON CONFLICT (email) DO UPDATE SET
         name = EXCLUDED.name,
         password = EXCLUDED.password,
@@ -138,9 +144,9 @@ export class DatabaseService {
       RETURNING id
     `;
 
-      const values = [userData.name, userData.email, userData.password];
+      const values = [id, publicId, userData.name, userData.email, userData.password];
       const result = await client.query(insertUserQuery, values);
-      const userId = result.rows[0].id;
+      const userId: string = result.rows[0].id;
 
       await client.query("COMMIT");
       console.log(`✅ Utente salvato/aggiornato con ID: ${userId}`);
@@ -274,8 +280,8 @@ export class DatabaseService {
     }
   }
 
-  async getUserLoyaltyCards(userId: number): Promise<Array<{
-    barId: number;
+  async getUserLoyaltyCards(userId: string): Promise<Array<{
+    barId: string;
     barName: string;
     merchantName: string;
     piva: string;
@@ -326,6 +332,28 @@ export class DatabaseService {
    */
   getPool(): pkg.Pool {
     return this.pool;
+  }
+
+  /**
+   * Genera un public_id unico nel formato FU-XXXXX
+   */
+  private async generateUniquePublicId(client: pkg.PoolClient): Promise<string> {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const MAX_ATTEMPTS = 10;
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      let code = "FU-";
+      for (let i = 0; i < 5; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      const check = await client.query(
+        "SELECT 1 FROM utenti WHERE public_id = $1 LIMIT 1",
+        [code],
+      );
+      if (check.rows.length === 0) return code;
+    }
+
+    throw new Error("Impossibile generare un public_id unico dopo 10 tentativi");
   }
 }
 

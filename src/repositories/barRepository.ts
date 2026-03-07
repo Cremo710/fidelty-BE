@@ -1,8 +1,9 @@
 import { databaseService } from "../services/databaseService.js";
+import { ulid } from "ulid";
 
 export interface BarDTO {
-  id: number;
-  user_id: number;
+  id: string;
+  user_id: string;
   iva: string;
   merchant_name: string;
   name: string;
@@ -42,7 +43,7 @@ export class BarRepository {
    * @returns ID del bar creato
    */
   async createBar(bar: {
-    userId: number;
+    userId: string;
     piva: string;
     merchantName: string;
     name: string;
@@ -50,19 +51,21 @@ export class BarRepository {
     image?: string | null;
     latitude?: number | null;
     longitude?: number | null;
-  }): Promise<number> {
+  }): Promise<string> {
     const client = await databaseService.getPool().connect();
 
     try {
       await client.query("BEGIN");
 
+      const id = ulid();
       const query = `
-        INSERT INTO bars (user_id, iva, merchant_name, name, address, latitude, longitude, image, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+        INSERT INTO bars (id, user_id, iva, merchant_name, name, address, latitude, longitude, image, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
         RETURNING id
       `;
 
       const values = [
+        id,
         bar.userId,
         bar.piva,
         bar.merchantName,
@@ -74,7 +77,7 @@ export class BarRepository {
       ];
 
       const result = await client.query(query, values);
-      const barId = result.rows[0].id;
+      const barId: string = result.rows[0].id;
 
       await client.query("COMMIT");
       console.log(`✅ Bar creato con ID: ${barId}`);
@@ -93,7 +96,7 @@ export class BarRepository {
    * @param id - ID del bar
    * @returns Dati del bar oppure null
    */
-  async findById(id: number): Promise<BarDTO | null> {
+  async findById(id: string): Promise<BarDTO | null> {
     try {
       const query = "SELECT * FROM bars WHERE id = $1";
       const result = await databaseService.getPool().query(query, [id]);
@@ -109,7 +112,7 @@ export class BarRepository {
    * @param userId - ID dell'utente proprietario
    * @returns Dati del bar oppure null
    */
-  async findByUserId(userId: number): Promise<BarDTO | null> {
+  async findByUserId(userId: string): Promise<BarDTO | null> {
     try {
       const query = "SELECT * FROM bars WHERE user_id = $1";
       const result = await databaseService.getPool().query(query, [userId]);
@@ -138,8 +141,8 @@ export class BarRepository {
    * Recupera tutti i bar con lat/lng per mappa
    */
   async getAllBars(): Promise<Array<{
-    id: number;
-    user_id: number;
+    id: string;
+    user_id: string;
     iva: string;
     name: string;
     merchant_name: string;
@@ -208,7 +211,7 @@ export class BarRepository {
    * @param updates - Campi da aggiornare
    * @returns true se l'aggiornamento è stato effettuato
    */
-  async updateBar(id: number, updates: Partial<BarDTO>): Promise<boolean> {
+  async updateBar(id: string, updates: Partial<BarDTO>): Promise<boolean> {
     const client = await databaseService.getPool().connect();
 
     try {
@@ -266,7 +269,7 @@ export class BarRepository {
    * @param id - ID del bar da eliminare
    * @returns true se l'eliminazione è stata effettuata
    */
-  async deleteBar(id: number): Promise<boolean> {
+  async deleteBar(id: string): Promise<boolean> {
     const client = await databaseService.getPool().connect();
 
     try {

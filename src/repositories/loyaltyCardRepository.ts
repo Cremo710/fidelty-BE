@@ -3,8 +3,8 @@ import type { PoolClient } from "pg";
 
 export interface LoyaltyCardDTO {
   id: number;
-  user_id: number;
-  bar_id: number;
+  user_id: string;
+  bar_id: string;
   points: number;
   receipts_count: number;
   last_receipt_at: Date | null;
@@ -14,7 +14,7 @@ export interface LoyaltyCardDTO {
 
 export interface LoyaltyCardWithBar {
   id: number;
-  barId: number;
+  barId: string;
   barName: string;
   merchantName: string;
   piva: string;
@@ -36,7 +36,7 @@ export class LoyaltyCardRepository {
   /**
    * Trova una carta fedeltà per utente e bar.
    */
-  async findByUserAndBar(userId: number, barId: number): Promise<LoyaltyCardDTO | null> {
+  async findByUserAndBar(userId: string, barId: string): Promise<LoyaltyCardDTO | null> {
     try {
       const query = "SELECT * FROM loyalty_cards WHERE user_id = $1 AND bar_id = $2";
       const result = await databaseService.getPool().query(query, [userId, barId]);
@@ -63,8 +63,8 @@ export class LoyaltyCardRepository {
    */
   async upsertCardInTransaction(
     client: PoolClient,
-    userId: number,
-    barId: number,
+    userId: string,
+    barId: string,
     pointsToAdd: number,
   ): Promise<number> {
     const query = `
@@ -87,7 +87,7 @@ export class LoyaltyCardRepository {
    * Query diretta sulla tabella loyalty_cards + JOIN bars.
    * Nessun GROUP BY su receipts → molto più veloce.
    */
-  async findByUserId(userId: number): Promise<LoyaltyCardWithBar[]> {
+  async findByUserId(userId: string): Promise<LoyaltyCardWithBar[]> {
     try {
       // Verifica se le colonne geo esistono (come fa barRepository)
       let geoSelect = "NULL::double precision AS latitude, NULL::double precision AS longitude";

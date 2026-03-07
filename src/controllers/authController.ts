@@ -67,6 +67,7 @@ export class AuthController {
           id: userId,
           email: input.email,
           name: input.name,
+          publicId: (await userRepository.findById(userId))?.public_id ?? null,
         },
       });
     } catch (error) {
@@ -151,6 +152,7 @@ export class AuthController {
           id: user.id,
           email: user.email,
           name: user.name,
+          publicId: user.public_id,
           accessToken,
           refreshToken,
           expiresIn: 900, // 15 minuti in secondi
@@ -321,6 +323,7 @@ export class AuthController {
         success: true,
         data: {
           id: user.id,
+          publicId: user.public_id,
           email: user.email,
           name: user.name,
           created_at: user.created_at,
@@ -334,6 +337,53 @@ export class AuthController {
         success: false,
         error: "Errore durante il recupero del profilo",
         code: "PROFILE_ERROR",
+      });
+    }
+  }
+
+  /**
+   * Handler per la ricerca utente tramite public_id
+   * GET /api/users/search?public_id=FU-XXXXX
+   */
+  async searchByPublicId(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const query = request.query as Record<string, string>;
+      const publicId = query.public_id;
+
+      if (!publicId || typeof publicId !== "string") {
+        return reply.status(400).send({
+          success: false,
+          error: "Parametro public_id obbligatorio",
+          code: "MISSING_PUBLIC_ID",
+        });
+      }
+
+      const user = await userRepository.findByPublicId(publicId);
+
+      if (!user) {
+        return reply.status(404).send({
+          success: false,
+          error: "Utente non trovato",
+          code: "USER_NOT_FOUND",
+        });
+      }
+
+      return reply.status(200).send({
+        success: true,
+        data: {
+          id: user.id,
+          publicId: user.public_id,
+          name: user.name,
+          email: user.email,
+        },
+      });
+    } catch (error) {
+      console.error("❌ Errore durante la ricerca per public_id:", error);
+
+      return reply.status(500).send({
+        success: false,
+        error: "Errore durante la ricerca",
+        code: "SEARCH_ERROR",
       });
     }
   }

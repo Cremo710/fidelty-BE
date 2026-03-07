@@ -8,6 +8,7 @@ import { authController } from "./controllers/authController.js";
 import { receiptsController } from "./controllers/receiptsController.js";
 import { barController } from "./controllers/barController.js";
 import { loyaltyCardRepository } from "./repositories/loyaltyCardRepository.js";
+import { userRepository } from "./repositories/userRepository.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 
@@ -120,6 +121,13 @@ async function createServer(): Promise<FastifyInstance> {
     return authController.getProfile(request, reply);
   });
 
+  // ==================== USER SEARCH ENDPOINTS ====================
+
+  // Search user by public_id (protected route)
+  app.get("/api/users/search", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return authController.searchByPublicId(request, reply);
+  });
+
   // ==================== BAR ENDPOINTS ====================
 
   // Bar registration endpoint (protected route)
@@ -228,6 +236,13 @@ async function startServer(): Promise<FastifyInstance> {
       await loyaltyCardRepository.backfillFromReceipts();
     } catch (err) {
       console.warn("⚠️ Backfill loyalty_cards fallito (non bloccante):", err);
+    }
+
+    // Backfill public_id per utenti che non ne hanno uno (idempotente)
+    try {
+      await userRepository.backfillPublicIds();
+    } catch (err) {
+      console.warn("⚠️ Backfill public_id fallito (non bloccante):", err);
     }
 
     // Setup hooks
