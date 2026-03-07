@@ -199,15 +199,18 @@ class ReceiptsController {
   async getMyLoyaltyCards(request: FastifyRequest, reply: FastifyReply) {
     try {
       const userId = request.userId;
+      console.log(`🃏 getMyLoyaltyCards chiamato — userId dal token: ${userId ?? "NESSUNO"}`);
       if (!userId) {
+        console.warn("⚠️ getMyLoyaltyCards: userId mancante, token non valido o middleware non eseguito");
         return reply.status(401).send({
           success: false,
           error: "Utente non autenticato",
           code: "UNAUTHORIZED",
         });
       }
-
+      
       const cards = await databaseService.getUserLoyaltyCards(userId);
+      console.log(`🃏 Trovate ${cards.length} carte fedeltà per userId=${userId}`);
 
       const mappedCards = cards.map((card) => ({
         id: card.barId,

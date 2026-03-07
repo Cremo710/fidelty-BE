@@ -197,6 +197,17 @@ export class BarController {
         console.warn('⚠️ Errore durante la geocodifica:', err);
       }
 
+      // Fallback: usa coordinate fornite dal FE se il geocoding BE non ha prodotto risultati
+      if (latitude === null || longitude === null) {
+        const feLat = Number(data.latitude);
+        const feLng = Number(data.longitude);
+        if (Number.isFinite(feLat) && Number.isFinite(feLng)) {
+          latitude = feLat;
+          longitude = feLng;
+          console.log(`📍 Coordinate ricevute dal FE: ${latitude}, ${longitude}`);
+        }
+      }
+
       // Salva il bar nel database
       const barId = await barRepository.createBar({
         userId,
