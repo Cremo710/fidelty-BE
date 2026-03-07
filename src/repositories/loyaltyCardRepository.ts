@@ -1,7 +1,5 @@
 import { databaseService } from "../services/databaseService.js";
-
-// Tipo PoolClient inferito dal pool per evitare dipendenze dirette da 'pg'
-type PoolClient = Awaited<ReturnType<ReturnType<typeof databaseService.getPool>["connect"]>>;
+import type { PoolClient } from "pg";
 
 export interface LoyaltyCardDTO {
   id: number;
