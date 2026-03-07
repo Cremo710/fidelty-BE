@@ -17,6 +17,7 @@
     "test": "vitest",
     "backfill:loyalty-cards": "tsx src/migrations/backfillLoyaltyCards.ts",
     "migrate:ulid": "tsx src/migrations/migrateToUlid.ts",
+    "migrate:receipts-ulid": "tsx src/migrations/migrateReceiptsToUlid.ts",
     "backfill:public-ids": "tsx src/migrations/backfillPublicIds.ts"
   },
   "dependencies": {

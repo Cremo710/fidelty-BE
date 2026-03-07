@@ -31,7 +31,7 @@ export class DatabaseService {
       await this.pool.query(`
       -- Tabella principale delle ricevute
       CREATE TABLE IF NOT EXISTS receipts (
-        id SERIAL PRIMARY KEY,
+        id VARCHAR(26) PRIMARY KEY,
         doc_id VARCHAR(50) UNIQUE NOT NULL, -- Corrisponde a billDocId
         merchant_name VARCHAR(255),
         merchant_address TEXT,
@@ -171,7 +171,7 @@ export class DatabaseService {
     }
   }
 
-  async saveReceipt(receiptData: any): Promise<number> {
+  async saveReceipt(receiptData: any): Promise<string> {
     const client = await this.pool.connect();
 
     try {
@@ -185,8 +185,11 @@ export class DatabaseService {
         throw new Error("Impossibile salvare: billDocId (Doc ID) mancante.");
       }
 
+      const receiptUlid = ulid();
+
       const insertReceiptQuery = `
       INSERT INTO receipts (
+        id,
         doc_id,
         user_id,
         bar_id,
@@ -198,7 +201,7 @@ export class DatabaseService {
         purchase_date,
         line_items,
         updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
       ON CONFLICT (doc_id) DO UPDATE SET
         user_id = EXCLUDED.user_id,
         bar_id = EXCLUDED.bar_id,
@@ -216,23 +219,24 @@ export class DatabaseService {
 
       // Mapping dei tuoi dati verso le colonne del DB
       const receiptValues = [
-        docId, // $1: doc_id
-        receiptData.userId || null, // $2: user_id
-        receiptData.barId || null, // $3: bar_id
-        receiptData.pointsEarned || 0, // $4: points_earned
-        receiptData.merchantName || "Sconosciuto", // $5: merchant_name
-        receiptData.merchantAddress || null, // $6: merchant_address
-        receiptData.pIva || null, // $7: merchant_tax_id (pIva)
-        Number.isFinite(parsedBillAmount) ? parsedBillAmount : 0, // $8: total_amount
-        receiptData.billDate || null, // $9: purchase_date
-        JSON.stringify(receiptData.lineItems || []), // $10: line_items (come stringa JSON)
+        receiptUlid, // $1: id (ULID)
+        docId, // $2: doc_id
+        receiptData.userId || null, // $3: user_id
+        receiptData.barId || null, // $4: bar_id
+        receiptData.pointsEarned || 0, // $5: points_earned
+        receiptData.merchantName || "Sconosciuto", // $6: merchant_name
+        receiptData.merchantAddress || null, // $7: merchant_address
+        receiptData.pIva || null, // $8: merchant_tax_id (pIva)
+        Number.isFinite(parsedBillAmount) ? parsedBillAmount : 0, // $9: total_amount
+        receiptData.billDate || null, // $10: purchase_date
+        JSON.stringify(receiptData.lineItems || []), // $11: line_items (come stringa JSON)
       ];
 
       const receiptResult = await client.query(
         insertReceiptQuery,
         receiptValues,
       );
-      const receiptId = receiptResult.rows[0].id;
+      const receiptId: string = receiptResult.rows[0].id;
 
       // Gestione Line Items (se presenti nel tuo oggetto)
       if (receiptData.lineItems && Array.isArray(receiptData.lineItems)) {
