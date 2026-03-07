@@ -256,6 +256,13 @@ export class DatabaseService {
     lastReceiptAt: Date;
   }>> {
     try {
+      // Debug: verifica cosa esiste a DB per questo utente
+      const debugResult = await this.pool.query(
+        `SELECT id, user_id, bar_id, points_earned, merchant_name FROM receipts WHERE user_id = $1`,
+        [userId]
+      );
+      console.log(`🔍 Ricevute trovate per userId=${userId}:`, debugResult.rows);
+
       const query = `
         SELECT
           b.id AS bar_id,
@@ -269,7 +276,6 @@ export class DatabaseService {
         FROM receipts r
         INNER JOIN bars b ON b.id = r.bar_id
         WHERE r.user_id = $1
-          AND r.points_earned > 0
         GROUP BY b.id, b.name, b.merchant_name, b.iva, b.image
         ORDER BY MAX(r.created_at) DESC
       `;
