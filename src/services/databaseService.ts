@@ -60,6 +60,7 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_utenti_email ON utenti(email);
 
       ALTER TABLE utenti ADD COLUMN IF NOT EXISTS public_id VARCHAR(8) UNIQUE;
+      ALTER TABLE utenti ADD COLUMN IF NOT EXISTS profile_image TEXT;
       CREATE INDEX IF NOT EXISTS idx_utenti_public_id ON utenti(public_id);
 
       -- Tabella per il refresh token (per future implementazioni)

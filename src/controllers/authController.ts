@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { getAuthService } from "../services/authService.js";
 import { userRepository } from "../repositories/userRepository.js";
+import { saveAndOptimizeImage, isImageFile, isFileSizeValid } from "../utils/imageUpload.js";
 import {
   validateRegisterInput,
   validateLoginInput,
@@ -326,6 +327,7 @@ export class AuthController {
           publicId: user.public_id,
           email: user.email,
           name: user.name,
+          profileImage: user.profile_image ?? null,
           created_at: user.created_at,
           updated_at: user.updated_at,
         },
@@ -385,6 +387,60 @@ export class AuthController {
         error: "Errore durante la ricerca",
         code: "SEARCH_ERROR",
       });
+    }
+  }
+  /**
+   * Handler per caricare/aggiornare la foto profilo dell'utente
+   */
+  async uploadProfilePhoto(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      let fileBuffer: Buffer | null = null;
+      let fileMimeType: string | null = null;
+      let fileName: string | null = null;
+
+      const parts = request.parts();
+      for await (const part of parts) {
+        if (part.type === "file" && part.fieldname === "profileImage") {
+          const chunks: Buffer[] = [];
+          for await (const chunk of part.file) {
+            chunks.push(chunk as Buffer);
+          }
+          fileBuffer = Buffer.concat(chunks);
+          fileMimeType = part.mimetype;
+          fileName = part.filename;
+        }
+      }
+
+      if (!fileBuffer || !fileName) {
+        return reply.status(400).send({ success: false, error: "Immagine profilo obbligatoria", code: "MISSING_FILE" });
+      }
+
+      if (!fileMimeType || !isImageFile(fileMimeType)) {
+        return reply.status(400).send({ success: false, error: "Solo file PNG, JPEG o WebP sono accettati", code: "INVALID_FILE_TYPE" });
+      }
+
+      if (!isFileSizeValid(fileBuffer.length)) {
+        return reply.status(400).send({ success: false, error: "File troppo grande (massimo 5MB)", code: "FILE_TOO_LARGE" });
+      }
+
+      const imageUrl = await saveAndOptimizeImage(fileBuffer, fileName, "fidelty/profiles");
+
+      await userRepository.updateUser(userId, { profile_image: imageUrl } as any);
+
+      return reply.status(200).send({
+        success: true,
+        message: "Foto profilo aggiornata",
+        data: { profileImage: imageUrl },
+      });
+    } catch (error) {
+      console.error("❌ Errore upload foto profilo:", error);
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "UPLOAD_ERROR" });
     }
   }
 }

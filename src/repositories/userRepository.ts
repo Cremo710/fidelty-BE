@@ -7,6 +7,7 @@ export interface UserDTO {
   name: string;
   email: string;
   password: string;
+  profile_image: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -134,6 +135,10 @@ export class UserRepository {
       if (updates.password) {
         fields.push(`password = $${paramCount++}`);
         values.push(updates.password);
+      }
+      if (updates.profile_image !== undefined) {
+        fields.push(`profile_image = $${paramCount++}`);
+        values.push(updates.profile_image);
       }
 
       if (fields.length === 0) {
