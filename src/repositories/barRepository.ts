@@ -177,6 +177,7 @@ export class BarRepository {
     merchant_name: string;
     address: string;
     image: string | null;
+    logo: string | null;
     latitude: number | null;
     longitude: number | null;
     created_at: Date;
@@ -194,6 +195,7 @@ export class BarRepository {
           name,
           address,
           image,
+          logo,
           ${includeGeoColumns ? "latitude" : "NULL::double precision AS latitude"},
           ${includeGeoColumns ? "longitude" : "NULL::double precision AS longitude"},
           created_at,
