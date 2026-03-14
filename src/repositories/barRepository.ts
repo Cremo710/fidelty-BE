@@ -9,6 +9,16 @@ export interface BarDTO {
   name: string;
   address: string;
   image: string | null;
+  logo: string | null;
+  contact_email: string | null;
+  phone: string | null;
+  instagram: string | null;
+  facebook: string | null;
+  tiktok: string | null;
+  website: string | null;
+  card_background_image: string | null;
+  card_color: string | null;
+  card_use_cover: boolean;
   latitude: number | null;
   longitude: number | null;
   created_at: Date;
@@ -49,6 +59,13 @@ export class BarRepository {
     name: string;
     address: string;
     image?: string | null;
+    logo?: string | null;
+    contactEmail?: string | null;
+    phone?: string | null;
+    instagram?: string | null;
+    facebook?: string | null;
+    tiktok?: string | null;
+    website?: string | null;
     latitude?: number | null;
     longitude?: number | null;
   }): Promise<string> {
@@ -59,8 +76,13 @@ export class BarRepository {
 
       const id = ulid();
       const query = `
-        INSERT INTO bars (id, user_id, iva, merchant_name, name, address, latitude, longitude, image, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+        INSERT INTO bars (
+          id, user_id, iva, merchant_name, name, address,
+          latitude, longitude, image, logo,
+          contact_email, phone, instagram, facebook, tiktok, website,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
         RETURNING id
       `;
 
@@ -74,6 +96,13 @@ export class BarRepository {
         bar.latitude ?? null,
         bar.longitude ?? null,
         bar.image || null,
+        bar.logo || null,
+        bar.contactEmail || null,
+        bar.phone || null,
+        bar.instagram || null,
+        bar.facebook || null,
+        bar.tiktok || null,
+        bar.website || null,
       ];
 
       const result = await client.query(query, values);
@@ -258,6 +287,58 @@ export class BarRepository {
     } catch (error) {
       await client.query("ROLLBACK");
       console.error("❌ Errore durante l'aggiornamento del bar:", error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Aggiorna la configurazione della card del bar
+   */
+  async updateCardConfig(barId: string, config: {
+    cardBackgroundImage?: string | null;
+    cardColor?: string | null;
+    cardUseCover?: boolean;
+  }): Promise<boolean> {
+    const client = await databaseService.getPool().connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const fields: string[] = [];
+      const values: any[] = [];
+      let paramCount = 1;
+
+      if (config.cardBackgroundImage !== undefined) {
+        fields.push(`card_background_image = $${paramCount++}`);
+        values.push(config.cardBackgroundImage);
+      }
+      if (config.cardColor !== undefined) {
+        fields.push(`card_color = $${paramCount++}`);
+        values.push(config.cardColor);
+      }
+      if (config.cardUseCover !== undefined) {
+        fields.push(`card_use_cover = $${paramCount++}`);
+        values.push(config.cardUseCover);
+      }
+
+      if (fields.length === 0) {
+        await client.query("COMMIT");
+        return true;
+      }
+
+      fields.push(`updated_at = CURRENT_TIMESTAMP`);
+      values.push(barId);
+
+      const query = `UPDATE bars SET ${fields.join(", ")} WHERE id = $${paramCount} RETURNING id`;
+      const result = await client.query(query, values);
+
+      await client.query("COMMIT");
+      return result.rows.length > 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("❌ Errore durante l'aggiornamento della config card:", error);
       throw error;
     } finally {
       client.release();

@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from "fastify";
 import { barRepository } from "../repositories/barRepository.js";
 import {
   validateBarRegistrationInput,
+  validateCardConfigInput,
   type BarRegistrationInput,
 } from "../validators/barValidator.js";
 import { saveAndOptimizeImage, isPngFile, isFileSizeValid } from "../utils/imageUpload.js";
@@ -56,13 +57,12 @@ export class BarController {
   }
 
   /**
-   * Handler per la registrazione di un nuovo bar
+   * Handler per la registrazione di un nuovo bar (Step 1 onboarding)
    */
   async register(request: FastifyRequest, reply: FastifyReply) {
     try {
       console.log("🏪 Ricevuta richiesta di registrazione bar");
 
-      // Estrai userId dal middleware di autenticazione
       const userId = (request as any).userId;
       if (!userId) {
         return reply.status(401).send({
@@ -74,32 +74,40 @@ export class BarController {
 
       // Recupera i dati dal multipart form
       const data: any = {};
-      let fileBuffer: Buffer | null = null;
-      let fileMimeType: string | null = null;
-      let fileName: string | null = null;
+      let coverFileBuffer: Buffer | null = null;
+      let coverFileMimeType: string | null = null;
+      let coverFileName: string | null = null;
+      let logoFileBuffer: Buffer | null = null;
+      let logoFileMimeType: string | null = null;
+      let logoFileName: string | null = null;
 
-      // Itera sui campi multipart
       const parts = request.parts();
       for await (const part of parts) {
         if (part.type === "field") {
           data[part.fieldname] = part.value as string;
         } else if (part.type === "file") {
-          if (part.fieldname === "coverImage") {
-            const chunks: Buffer[] = [];
-            for await (const chunk of part.file) {
-              chunks.push(chunk as Buffer);
-            }
-            fileBuffer = Buffer.concat(chunks);
-            fileMimeType = part.mimetype;
-            fileName = part.filename;
+          const chunks: Buffer[] = [];
+          for await (const chunk of part.file) {
+            chunks.push(chunk as Buffer);
+          }
+          const buf = Buffer.concat(chunks);
 
-            console.log(`📁 File ricevuto: ${fileName} (${fileMimeType}, ${fileBuffer.length} bytes)`);
+          if (part.fieldname === "coverImage") {
+            coverFileBuffer = buf;
+            coverFileMimeType = part.mimetype;
+            coverFileName = part.filename;
+            console.log(`📁 Cover ricevuta: ${coverFileName} (${coverFileMimeType}, ${buf.length} bytes)`);
+          } else if (part.fieldname === "logo") {
+            logoFileBuffer = buf;
+            logoFileMimeType = part.mimetype;
+            logoFileName = part.filename;
+            console.log(`📁 Logo ricevuto: ${logoFileName} (${logoFileMimeType}, ${buf.length} bytes)`);
           }
         }
       }
 
-      // Validazione file
-      if (!fileBuffer || !fileName) {
+      // Validazione cover obbligatoria
+      if (!coverFileBuffer || !coverFileName) {
         return reply.status(400).send({
           success: false,
           error: "Foto di copertina obbligatoria",
@@ -107,7 +115,7 @@ export class BarController {
         });
       }
 
-      if (!fileMimeType || !isPngFile(fileMimeType)) {
+      if (!coverFileMimeType || !isPngFile(coverFileMimeType)) {
         return reply.status(400).send({
           success: false,
           error: "Solo file PNG sono accettati",
@@ -115,12 +123,30 @@ export class BarController {
         });
       }
 
-      if (!isFileSizeValid(fileBuffer.length)) {
+      if (!isFileSizeValid(coverFileBuffer.length)) {
         return reply.status(400).send({
           success: false,
           error: "File troppo grande (massimo 5MB)",
           code: "FILE_TOO_LARGE",
         });
+      }
+
+      // Validazione logo (opzionale)
+      if (logoFileBuffer && logoFileName) {
+        if (!logoFileMimeType || !isPngFile(logoFileMimeType)) {
+          return reply.status(400).send({
+            success: false,
+            error: "Logo: solo file PNG sono accettati",
+            code: "INVALID_LOGO_FILE_TYPE",
+          });
+        }
+        if (!isFileSizeValid(logoFileBuffer.length)) {
+          return reply.status(400).send({
+            success: false,
+            error: "Logo troppo grande (massimo 5MB)",
+            code: "LOGO_TOO_LARGE",
+          });
+        }
       }
 
       // Validazione input con Zod
@@ -156,13 +182,13 @@ export class BarController {
         });
       }
 
-      // Salva e ottimizza l'immagine
+      // Salva immagine di copertina
       let imageUrl: string | null = null;
       try {
-        imageUrl = await saveAndOptimizeImage(fileBuffer, fileName);
-        console.log(`✅ Immagine salvata: ${imageUrl}`);
+        imageUrl = await saveAndOptimizeImage(coverFileBuffer, coverFileName);
+        console.log(`✅ Cover salvata: ${imageUrl}`);
       } catch (error) {
-        console.error("❌ Errore nel salvataggio dell'immagine:", error);
+        console.error("❌ Errore nel salvataggio della cover:", error);
         return reply.status(500).send({
           success: false,
           error: "Errore nel salvataggio della foto",
@@ -170,7 +196,18 @@ export class BarController {
         });
       }
 
-      // Prova a geocodificare l'indirizzo
+      // Salva logo (opzionale)
+      let logoUrl: string | null = null;
+      if (logoFileBuffer && logoFileName) {
+        try {
+          logoUrl = await saveAndOptimizeImage(logoFileBuffer, logoFileName);
+          console.log(`✅ Logo salvato: ${logoUrl}`);
+        } catch (error) {
+          console.warn("⚠️ Errore nel salvataggio del logo (non bloccante):", error);
+        }
+      }
+
+      // Geocoding
       let latitude: number | null = null;
       let longitude: number | null = null;
       try {
@@ -179,25 +216,22 @@ export class BarController {
           const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
             input.address
           )}&key=${apiKey}`;
-          
           const geoResp = await fetch(geocodeUrl);
-          // Cast esplicito per risolvere l'errore TS18046 (unknown)
           const geoJson = (await geoResp.json()) as GoogleGeocodeResponse;
-
-          if (geoJson.status === 'OK' && geoJson.results && geoJson.results[0]) {
+          if (geoJson.status === "OK" && geoJson.results && geoJson.results[0]) {
             const loc = geoJson.results[0].geometry.location;
             latitude = Number(loc.lat);
             longitude = Number(loc.lng);
             console.log(`📍 Geocoding OK: ${latitude}, ${longitude}`);
           } else {
-            console.log('⚠️ Geocoding non disponibile o fallito:', geoJson.status);
+            console.log("⚠️ Geocoding non disponibile o fallito:", geoJson.status);
           }
         }
       } catch (err) {
-        console.warn('⚠️ Errore durante la geocodifica:', err);
+        console.warn("⚠️ Errore durante la geocodifica:", err);
       }
 
-      // Fallback: usa coordinate fornite dal FE se il geocoding BE non ha prodotto risultati
+      // Fallback coordinate da FE
       if (latitude === null || longitude === null) {
         const feLat = Number(data.latitude);
         const feLng = Number(data.longitude);
@@ -216,6 +250,13 @@ export class BarController {
         name: input.barName,
         address: input.address,
         image: imageUrl,
+        logo: logoUrl,
+        contactEmail: input.contactEmail ?? null,
+        phone: input.phone ?? null,
+        instagram: input.instagram ?? null,
+        facebook: input.facebook ?? null,
+        tiktok: input.tiktok ?? null,
+        website: input.website ?? null,
         latitude,
         longitude,
       });
@@ -233,6 +274,13 @@ export class BarController {
           businessName: input.businessName,
           address: input.address,
           coverImage: imageUrl,
+          logo: logoUrl,
+          contactEmail: input.contactEmail ?? null,
+          phone: input.phone ?? null,
+          instagram: input.instagram ?? null,
+          facebook: input.facebook ?? null,
+          tiktok: input.tiktok ?? null,
+          website: input.website ?? null,
           latitude,
           longitude,
         },
@@ -245,6 +293,122 @@ export class BarController {
         error: errorMessage,
         code: "REGISTRATION_ERROR",
       });
+    }
+  }
+
+  /**
+   * Handler per aggiornare la configurazione della card del bar (Step 2 onboarding)
+   */
+  async updateCardConfig(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const bar = await barRepository.findByUserId(userId);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      const data: any = {};
+      let cardBgFileBuffer: Buffer | null = null;
+      let cardBgFileMimeType: string | null = null;
+      let cardBgFileName: string | null = null;
+
+      const contentType = request.headers["content-type"] || "";
+      if (contentType.includes("multipart/form-data")) {
+        const parts = request.parts();
+        for await (const part of parts) {
+          if (part.type === "field") {
+            data[part.fieldname] = part.value as string;
+          } else if (part.type === "file" && part.fieldname === "cardBackgroundImage") {
+            const chunks: Buffer[] = [];
+            for await (const chunk of part.file) {
+              chunks.push(chunk as Buffer);
+            }
+            cardBgFileBuffer = Buffer.concat(chunks);
+            cardBgFileMimeType = part.mimetype;
+            cardBgFileName = part.filename;
+            console.log(`📁 Card bg ricevuta: ${cardBgFileName} (${cardBgFileMimeType})`);
+          }
+        }
+      } else {
+        Object.assign(data, request.body as object);
+      }
+
+      // Normalizza cardUseCover
+      if (data.cardUseCover !== undefined) {
+        data.cardUseCover = data.cardUseCover === "true" || data.cardUseCover === true;
+      }
+
+      const validation = validateCardConfigInput({
+        cardColor: data.cardColor,
+        cardUseCover: data.cardUseCover,
+      });
+
+      if (!validation.success) {
+        return reply.status(400).send({
+          success: false,
+          error: "Dati configurazione card non validi",
+          code: "VALIDATION_ERROR",
+          details: validation.errors,
+        });
+      }
+
+      // Salva immagine background card (opzionale)
+      let cardBgImageUrl: string | null = bar.card_background_image;
+
+      if (cardBgFileBuffer && cardBgFileName) {
+        if (!cardBgFileMimeType || !isPngFile(cardBgFileMimeType)) {
+          return reply.status(400).send({
+            success: false,
+            error: "Solo file PNG accettati per la card",
+            code: "INVALID_FILE_TYPE",
+          });
+        }
+        if (!isFileSizeValid(cardBgFileBuffer.length)) {
+          return reply.status(400).send({
+            success: false,
+            error: "Immagine card troppo grande (massimo 5MB)",
+            code: "FILE_TOO_LARGE",
+          });
+        }
+        try {
+          cardBgImageUrl = await saveAndOptimizeImage(cardBgFileBuffer, cardBgFileName);
+          console.log(`✅ Card background salvata: ${cardBgImageUrl}`);
+        } catch (err) {
+          console.error("❌ Errore nel salvataggio del background card:", err);
+          return reply.status(500).send({
+            success: false,
+            error: "Errore nel salvataggio dell'immagine card",
+            code: "IMAGE_SAVE_ERROR",
+          });
+        }
+      }
+
+      const cardUseCover = validation.data?.cardUseCover ?? false;
+      // Se cardUseCover è true e non c'è un'immagine custom uploadata, usa la cover
+      const finalCardBgImage = cardUseCover && !cardBgFileBuffer ? bar.image : cardBgImageUrl;
+
+      await barRepository.updateCardConfig(bar.id, {
+        cardBackgroundImage: finalCardBgImage,
+        cardColor: validation.data?.cardColor ?? null,
+        cardUseCover,
+      });
+
+      return reply.status(200).send({
+        success: true,
+        message: "Configurazione card aggiornata",
+        data: {
+          cardBackgroundImage: finalCardBgImage,
+          cardColor: validation.data?.cardColor ?? null,
+          cardUseCover,
+        },
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "UPDATE_ERROR" });
     }
   }
 
@@ -272,6 +436,16 @@ export class BarController {
           businessName: bar.merchant_name,
           address: bar.address,
           coverImage: bar.image,
+          logo: bar.logo,
+          contactEmail: bar.contact_email,
+          phone: bar.phone,
+          instagram: bar.instagram,
+          facebook: bar.facebook,
+          tiktok: bar.tiktok,
+          website: bar.website,
+          cardBackgroundImage: bar.card_background_image,
+          cardColor: bar.card_color,
+          cardUseCover: bar.card_use_cover,
           createdAt: bar.created_at,
           updatedAt: bar.updated_at,
         },
@@ -316,7 +490,7 @@ export class BarController {
 
       return reply.status(200).send({ success: true, data: enrichedBars });
     } catch (error) {
-      return reply.status(500).send({ success: false, error: 'Errore nel recupero dei bar' });
+      return reply.status(500).send({ success: false, error: "Errore nel recupero dei bar" });
     }
   }
 }

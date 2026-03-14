@@ -9,6 +9,8 @@ import { receiptsController } from "./controllers/receiptsController.js";
 import { barController } from "./controllers/barController.js";
 import { loyaltyCardRepository } from "./repositories/loyaltyCardRepository.js";
 import { userRepository } from "./repositories/userRepository.js";
+import { offerController } from "./controllers/offerController.js";
+import { openingHoursController } from "./controllers/openingHoursController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 
@@ -143,6 +145,47 @@ async function createServer(): Promise<FastifyInstance> {
   // Public endpoint: list bars with coordinates for map preview
   app.get("/api/bars", async (request, reply) => {
     return barController.listBars(request, reply);
+  });
+
+  // ==================== BAR CARD CONFIG ENDPOINTS ====================
+
+  // Update bar card configuration (Step 2 onboarding)
+  app.patch("/api/bar/card-config", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.updateCardConfig(request, reply);
+  });
+
+  // ==================== OFFERS ENDPOINTS ====================
+
+  // Create a new offer
+  app.post("/api/bar/offers", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return offerController.createOffer(request, reply);
+  });
+
+  // List offers for the authenticated bar owner
+  app.get("/api/bar/offers", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return offerController.listOffers(request, reply);
+  });
+
+  // Update an offer
+  app.put("/api/bar/offers/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return offerController.updateOffer(request, reply);
+  });
+
+  // Delete an offer
+  app.delete("/api/bar/offers/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return offerController.deleteOffer(request, reply);
+  });
+
+  // ==================== OPENING HOURS ENDPOINTS ====================
+
+  // Set opening hours (upsert)
+  app.post("/api/bar/opening-hours", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return openingHoursController.setOpeningHours(request, reply);
+  });
+
+  // Get opening hours
+  app.get("/api/bar/opening-hours", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return openingHoursController.getOpeningHours(request, reply);
   });
 
   // ==================== RECEIPT ENDPOINTS ====================

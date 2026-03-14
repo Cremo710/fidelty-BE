@@ -115,6 +115,49 @@ export class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_loyalty_cards_user_id ON loyalty_cards(user_id);
       CREATE INDEX IF NOT EXISTS idx_loyalty_cards_bar_id ON loyalty_cards(bar_id);
+
+      -- Estensione tabella bars: nuovi campi per il flusso di onboarding
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS logo TEXT;
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS contact_email VARCHAR(255);
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS instagram VARCHAR(255);
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS facebook VARCHAR(255);
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS tiktok VARCHAR(255);
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS website VARCHAR(500);
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS card_background_image TEXT;
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS card_color VARCHAR(50) DEFAULT '#bc7ed1';
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS card_use_cover BOOLEAN DEFAULT FALSE;
+
+      -- Tabella offerte/promozioni
+      CREATE TABLE IF NOT EXISTS offers (
+        id VARCHAR(26) PRIMARY KEY,
+        bar_id VARCHAR(26) NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        conditions TEXT,
+        points_required INTEGER NOT NULL DEFAULT 0,
+        valid_from TIMESTAMP,
+        valid_until TIMESTAMP,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_offers_bar_id ON offers(bar_id);
+
+      -- Tabella orari di apertura
+      CREATE TABLE IF NOT EXISTS opening_hours (
+        id SERIAL PRIMARY KEY,
+        bar_id VARCHAR(26) NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
+        day_of_week INTEGER NOT NULL CHECK (day_of_week >= 0 AND day_of_week <= 6),
+        is_closed BOOLEAN DEFAULT FALSE,
+        time_ranges JSONB NOT NULL DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(bar_id, day_of_week)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_opening_hours_bar_id ON opening_hours(bar_id);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
