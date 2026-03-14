@@ -53,8 +53,8 @@ export const barRegistrationSchema = z.object({
     .nullable(),
   website: z
     .string()
-    .url("URL sito web non valido")
-    .max(500, "URL non può superare 500 caratteri")
+    .max(500, "Sito web non può superare 500 caratteri")
+    .trim()
     .optional()
     .nullable(),
   coverImageUrl: z

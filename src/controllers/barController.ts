@@ -5,7 +5,11 @@ import {
   validateCardConfigInput,
   type BarRegistrationInput,
 } from "../validators/barValidator.js";
-import { saveAndOptimizeImage, isPngFile, isFileSizeValid } from "../utils/imageUpload.js";
+import { saveAndOptimizeImage, isImageFile, isFileSizeValid } from "../utils/imageUpload.js";
+import { offerRepository } from "../repositories/offerRepository.js";
+import { openingHoursRepository } from "../repositories/openingHoursRepository.js";
+import { validateCreateOfferInput } from "../validators/offerValidator.js";
+import { validateSetOpeningHoursInput } from "../validators/openingHoursValidator.js";
 
 /**
  * Interfaccia per la risposta di Google Geocoding
@@ -84,7 +88,9 @@ export class BarController {
       const parts = request.parts();
       for await (const part of parts) {
         if (part.type === "field") {
-          data[part.fieldname] = part.value as string;
+          // Trim every string value at ingestion to prevent leading/trailing
+          // whitespace from breaking validators like .email() or .regex()
+          data[part.fieldname] = (part.value as string).trim();
         } else if (part.type === "file") {
           const chunks: Buffer[] = [];
           for await (const chunk of part.file) {
@@ -115,10 +121,10 @@ export class BarController {
         });
       }
 
-      if (!coverFileMimeType || !isPngFile(coverFileMimeType)) {
+      if (!coverFileMimeType || !isImageFile(coverFileMimeType)) {
         return reply.status(400).send({
           success: false,
-          error: "Solo file PNG sono accettati",
+          error: "Solo file PNG, JPEG o WebP sono accettati",
           code: "INVALID_FILE_TYPE",
         });
       }
@@ -133,10 +139,10 @@ export class BarController {
 
       // Validazione logo (opzionale)
       if (logoFileBuffer && logoFileName) {
-        if (!logoFileMimeType || !isPngFile(logoFileMimeType)) {
+        if (!logoFileMimeType || !isImageFile(logoFileMimeType)) {
           return reply.status(400).send({
             success: false,
-            error: "Logo: solo file PNG sono accettati",
+            error: "Logo: solo file PNG, JPEG o WebP sono accettati",
             code: "INVALID_LOGO_FILE_TYPE",
           });
         }
@@ -163,7 +169,7 @@ export class BarController {
       const input = validation.data as BarRegistrationInput;
 
       // Verifica se la P.IVA è già registrata
-      const existingBar = await barRepository.pivaExists(input.piva);
+      const existingBar = await barRepository.findByPiva(input.piva);
       if (existingBar) {
         return reply.status(409).send({
           success: false,
@@ -360,10 +366,10 @@ export class BarController {
       let cardBgImageUrl: string | null = bar.card_background_image;
 
       if (cardBgFileBuffer && cardBgFileName) {
-        if (!cardBgFileMimeType || !isPngFile(cardBgFileMimeType)) {
+        if (!cardBgFileMimeType || !isImageFile(cardBgFileMimeType)) {
           return reply.status(400).send({
             success: false,
-            error: "Solo file PNG accettati per la card",
+            error: "Solo file PNG, JPEG o WebP accettati per la card",
             code: "INVALID_FILE_TYPE",
           });
         }
@@ -491,6 +497,266 @@ export class BarController {
       return reply.status(200).send({ success: true, data: enrichedBars });
     } catch (error) {
       return reply.status(500).send({ success: false, error: "Errore nel recupero dei bar" });
+    }
+  }
+
+  /**
+   * Handler per la registrazione completa e atomica del bar.
+   * Raccoglie dati di tutti gli step (bar info, card config, offerte, orari)
+   * e li salva in un'unica transazione. Nessun dato parziale viene salvato.
+   */
+  async completeRegistration(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      console.log("🏪 Ricevuta richiesta di registrazione completa bar");
+
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      // Parse multipart form
+      const data: any = {};
+      const files: Record<string, { buffer: Buffer; mimetype: string; filename: string }> = {};
+
+      const parts = request.parts();
+      for await (const part of parts) {
+        if (part.type === "field") {
+          data[part.fieldname] = (part.value as string).trim();
+        } else if (part.type === "file") {
+          const chunks: Buffer[] = [];
+          for await (const chunk of part.file) {
+            chunks.push(chunk as Buffer);
+          }
+          files[part.fieldname] = {
+            buffer: Buffer.concat(chunks),
+            mimetype: part.mimetype,
+            filename: part.filename,
+          };
+        }
+      }
+
+      // --- Validazione cover ---
+      const coverFile = files["coverImage"];
+      if (!coverFile) {
+        return reply.status(400).send({ success: false, error: "Foto di copertina obbligatoria", code: "MISSING_FILE" });
+      }
+      if (!isImageFile(coverFile.mimetype)) {
+        return reply.status(400).send({ success: false, error: "Solo file PNG, JPEG o WebP sono accettati", code: "INVALID_FILE_TYPE" });
+      }
+      if (!isFileSizeValid(coverFile.buffer.length)) {
+        return reply.status(400).send({ success: false, error: "File troppo grande (massimo 5MB)", code: "FILE_TOO_LARGE" });
+      }
+
+      // --- Validazione logo (opzionale) ---
+      const logoFile = files["logo"];
+      if (logoFile) {
+        if (!isImageFile(logoFile.mimetype)) {
+          return reply.status(400).send({ success: false, error: "Logo: solo file PNG, JPEG o WebP sono accettati", code: "INVALID_LOGO_FILE_TYPE" });
+        }
+        if (!isFileSizeValid(logoFile.buffer.length)) {
+          return reply.status(400).send({ success: false, error: "Logo troppo grande (massimo 5MB)", code: "LOGO_TOO_LARGE" });
+        }
+      }
+
+      // --- Validazione card bg (opzionale) ---
+      const cardBgFile = files["cardBackgroundImage"];
+      if (cardBgFile) {
+        if (!isImageFile(cardBgFile.mimetype)) {
+          return reply.status(400).send({ success: false, error: "Immagine card: solo PNG, JPEG o WebP", code: "INVALID_FILE_TYPE" });
+        }
+        if (!isFileSizeValid(cardBgFile.buffer.length)) {
+          return reply.status(400).send({ success: false, error: "Immagine card troppo grande (massimo 5MB)", code: "FILE_TOO_LARGE" });
+        }
+      }
+
+      // --- Validazione input bar ---
+      const barValidation = validateBarRegistrationInput(data);
+      if (!barValidation.success) {
+        return reply.status(400).send({
+          success: false,
+          error: "Dati di input non validi",
+          code: "VALIDATION_ERROR",
+          details: barValidation.errors,
+        });
+      }
+      const barInput = barValidation.data as BarRegistrationInput;
+
+      // --- Validazione offerte (opzionale, JSON string) ---
+      let parsedOffers: Array<{
+        title: string;
+        description?: string | null;
+        conditions?: string | null;
+        pointsRequired: number;
+        isActive?: boolean;
+      }> = [];
+      if (data.offers) {
+        try {
+          const raw = JSON.parse(data.offers);
+          if (Array.isArray(raw)) {
+            for (const offer of raw) {
+              const ov = validateCreateOfferInput(offer);
+              if (!ov.success) {
+                return reply.status(400).send({
+                  success: false,
+                  error: "Dati offerta non validi",
+                  code: "VALIDATION_ERROR",
+                  details: ov.errors,
+                });
+              }
+              parsedOffers.push(ov.data!);
+            }
+          }
+        } catch {
+          return reply.status(400).send({ success: false, error: "Formato offerte non valido (JSON atteso)", code: "VALIDATION_ERROR" });
+        }
+      }
+
+      // --- Validazione orari (opzionale, JSON string) ---
+      let parsedHours: any = null;
+      if (data.openingHours) {
+        try {
+          const raw = JSON.parse(data.openingHours);
+          const hv = validateSetOpeningHoursInput({ hours: raw });
+          if (!hv.success) {
+            return reply.status(400).send({
+              success: false,
+              error: "Dati orari non validi",
+              code: "VALIDATION_ERROR",
+              details: hv.errors,
+            });
+          }
+          parsedHours = hv.data!.hours;
+        } catch {
+          return reply.status(400).send({ success: false, error: "Formato orari non valido (JSON atteso)", code: "VALIDATION_ERROR" });
+        }
+      }
+
+      // --- Validazione card config ---
+      const cardColor = data.cardColor || null;
+      const cardUseCover = data.cardUseCover === "true" || data.cardUseCover === true;
+      if (cardColor) {
+        const cv = validateCardConfigInput({ cardColor, cardUseCover });
+        if (!cv.success) {
+          return reply.status(400).send({
+            success: false,
+            error: "Dati configurazione card non validi",
+            code: "VALIDATION_ERROR",
+            details: cv.errors,
+          });
+        }
+      }
+
+      // --- Verifica unicità PIVA e utente ---
+      const existingBar = await barRepository.findByPiva(barInput.piva);
+      if (existingBar) {
+        return reply.status(409).send({ success: false, error: "Partita IVA già registrata", code: "PIVA_EXISTS" });
+      }
+      const userBar = await barRepository.findByUserId(userId);
+      if (userBar) {
+        return reply.status(409).send({ success: false, error: "Utente ha già un bar registrato", code: "BAR_ALREADY_EXISTS" });
+      }
+
+      // --- Upload immagini su Cloudinary ---
+      let coverUrl: string;
+      try {
+        coverUrl = await saveAndOptimizeImage(coverFile.buffer, coverFile.filename);
+      } catch (error) {
+        console.error("❌ Errore upload cover:", error);
+        return reply.status(500).send({ success: false, error: "Errore nel caricamento della foto di copertina", code: "IMAGE_UPLOAD_ERROR" });
+      }
+
+      let logoUrl: string | null = null;
+      if (logoFile) {
+        try {
+          logoUrl = await saveAndOptimizeImage(logoFile.buffer, logoFile.filename, "fidelty/logos");
+        } catch (error) {
+          console.warn("⚠️ Errore upload logo:", error);
+        }
+      }
+
+      let cardBgUrl: string | null = null;
+      if (cardBgFile) {
+        try {
+          cardBgUrl = await saveAndOptimizeImage(cardBgFile.buffer, cardBgFile.filename, "fidelty/cards");
+        } catch (error) {
+          console.warn("⚠️ Errore upload card bg:", error);
+        }
+      }
+
+      // --- Geocoding ---
+      let latitude: number | null = null;
+      let longitude: number | null = null;
+      try {
+        const coords = await this.geocodeAddress(barInput.address);
+        if (coords) {
+          latitude = coords.latitude;
+          longitude = coords.longitude;
+        }
+      } catch { }
+
+      // Fallback coordinate da FE
+      if (latitude === null || longitude === null) {
+        const feLat = Number(data.latitude);
+        const feLng = Number(data.longitude);
+        if (Number.isFinite(feLat) && Number.isFinite(feLng)) {
+          latitude = feLat;
+          longitude = feLng;
+        }
+      }
+
+      // --- Salva TUTTO in una sola transazione ---
+      const finalCardBgImage = cardUseCover && !cardBgFile ? coverUrl : cardBgUrl;
+
+      const barId = await barRepository.createBarComplete({
+        userId,
+        piva: barInput.piva,
+        merchantName: barInput.businessName,
+        name: barInput.barName,
+        address: barInput.address,
+        image: coverUrl,
+        logo: logoUrl,
+        contactEmail: barInput.contactEmail ?? null,
+        phone: barInput.phone ?? null,
+        instagram: barInput.instagram ?? null,
+        facebook: barInput.facebook ?? null,
+        tiktok: barInput.tiktok ?? null,
+        website: barInput.website ?? null,
+        latitude,
+        longitude,
+        cardColor: cardColor,
+        cardBackgroundImage: finalCardBgImage,
+        cardUseCover,
+        offers: parsedOffers,
+        openingHours: parsedHours,
+      });
+
+      console.log(`✅ Bar registrato completamente: ${barInput.barName} (ID: ${barId})`);
+
+      return reply.status(200).send({
+        success: true,
+        message: "Bar registrato con successo",
+        data: {
+          id: barId,
+          userId,
+          piva: barInput.piva,
+          barName: barInput.barName,
+          businessName: barInput.businessName,
+          address: barInput.address,
+          coverImage: coverUrl,
+          logo: logoUrl,
+          contactEmail: barInput.contactEmail ?? null,
+          phone: barInput.phone ?? null,
+          latitude,
+          longitude,
+          cardColor,
+          cardBackgroundImage: finalCardBgImage,
+          cardUseCover,
+        },
+      });
+    } catch (error) {
+      console.error("❌ Errore durante la registrazione completa del bar:", error);
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "REGISTRATION_ERROR" });
     }
   }
 }

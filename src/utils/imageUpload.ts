@@ -1,34 +1,34 @@
 import sharp from "sharp";
-import { promises as fs } from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+import { v2 as cloudinary } from "cloudinary";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Configura Cloudinary dai env vars
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+const ACCEPTED_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+]);
 
 /**
- * Salva e ottimizza un'immagine PNG
+ * Ottimizza e carica un'immagine su Cloudinary
  * @param bufferFile - Buffer del file immagine
- * @param filename - Nome del file
- * @returns URL dell'immagine salvata
+ * @param filename - Nome del file (usato per generare il public_id)
+ * @param folder - Cartella Cloudinary (default: "fidelty/bars")
+ * @returns URL sicura dell'immagine su Cloudinary
  */
 export async function saveAndOptimizeImage(
   bufferFile: Buffer,
-  filename: string
+  filename: string,
+  folder: string = "fidelty/bars"
 ): Promise<string> {
   try {
-    // In produzione usare cloud storage (S3, Cloudinary, Firebase, ecc)
-    // Per development usare filesystem locale
-
-    const uploadDir = path.join(__dirname, "../../uploads/bars");
-
-    // Crea directory se non esiste
-    try {
-      await fs.mkdir(uploadDir, { recursive: true });
-    } catch (err) {
-      console.warn("Cartella upload già esiste");
-    }
-
-    // Ottimizzare immagine con sharp
+    // Ottimizza con sharp prima di caricare
     const optimizedBuffer = await sharp(bufferFile)
       .resize(1200, 675, {
         fit: "inside",
@@ -37,35 +37,43 @@ export async function saveAndOptimizeImage(
       .png({ quality: 80 })
       .toBuffer();
 
-    // Generare nome file univoco
-    const timestamp = Date.now();
-    const uniqueFilename = `${timestamp}-${filename}`;
-    const filepath = path.join(uploadDir, uniqueFilename);
+    // Upload su Cloudinary
+    const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
+      const timestamp = Date.now();
+      const safeName = filename.replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder,
+          public_id: `${timestamp}-${safeName}`,
+          resource_type: "image",
+          overwrite: false,
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result as { secure_url: string });
+        }
+      );
+      uploadStream.end(optimizedBuffer);
+    });
 
-    // Salvare file
-    await fs.writeFile(filepath, optimizedBuffer);
-
-    console.log(`✅ Immagine salvata: ${uniqueFilename}`);
-
-    // Ritornare URL accessibile
-    // In development: /uploads/bars/filename
-    // In production: URL cloud storage (S3, ecc)
-    const imageUrl = `/uploads/bars/${uniqueFilename}`;
-
-    return imageUrl;
+    console.log(`✅ Immagine caricata su Cloudinary: ${result.secure_url}`);
+    return result.secure_url;
   } catch (error) {
-    console.error("❌ Errore nel salvataggio dell'immagine:", error);
-    throw new Error("Impossibile salvare l'immagine");
+    console.error("❌ Errore nel caricamento dell'immagine su Cloudinary:", error);
+    throw new Error("Impossibile caricare l'immagine");
   }
 }
 
 /**
- * Valida il tipo MIME del file
- * @param mimeType - MIME type del file
- * @returns true se PNG, false altrimenti
+ * Valida il tipo MIME del file (accetta PNG, JPEG, WebP)
  */
+export function isImageFile(mimeType: string | undefined): boolean {
+  return !!mimeType && ACCEPTED_MIME_TYPES.has(mimeType);
+}
+
+/** @deprecated Usa isImageFile */
 export function isPngFile(mimeType: string | undefined): boolean {
-  return mimeType === "image/png";
+  return isImageFile(mimeType);
 }
 
 /**

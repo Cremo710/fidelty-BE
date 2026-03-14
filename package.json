@@ -27,6 +27,7 @@
     "@types/pg": "^8.11.10",
     "argon2": "^0.31.2",
     "axios": "^1.13.2",
+    "cloudinary": "^2.9.0",
     "dotenv": "^16.4.4",
     "fastify": "^5.0.0",
     "form-data": "^4.0.0",

@@ -370,6 +370,130 @@ export class BarRepository {
       client.release();
     }
   }
+
+  /**
+   * Crea un bar con tutti i dati correlati (card config, offerte, orari)
+   * in un'unica transazione atomica. Se qualcosa fallisce, nessun dato viene salvato.
+   */
+  async createBarComplete(data: {
+    userId: string;
+    piva: string;
+    merchantName: string;
+    name: string;
+    address: string;
+    image?: string | null;
+    logo?: string | null;
+    contactEmail?: string | null;
+    phone?: string | null;
+    instagram?: string | null;
+    facebook?: string | null;
+    tiktok?: string | null;
+    website?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    cardColor?: string | null;
+    cardBackgroundImage?: string | null;
+    cardUseCover?: boolean;
+    offers?: Array<{
+      title: string;
+      description?: string | null;
+      conditions?: string | null;
+      pointsRequired: number;
+      isActive?: boolean;
+    }>;
+    openingHours?: Array<{
+      dayOfWeek: number;
+      isClosed: boolean;
+      timeRanges: Array<{ open: string; close: string }>;
+    }> | null;
+  }): Promise<string> {
+    const client = await databaseService.getPool().connect();
+
+    try {
+      await client.query("BEGIN");
+
+      // 1. Crea il bar
+      const barId = ulid();
+      const barQuery = `
+        INSERT INTO bars (
+          id, user_id, iva, merchant_name, name, address,
+          latitude, longitude, image, logo,
+          contact_email, phone, instagram, facebook, tiktok, website,
+          card_background_image, card_color, card_use_cover,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, CURRENT_TIMESTAMP)
+        RETURNING id
+      `;
+      const barValues = [
+        barId,
+        data.userId,
+        data.piva,
+        data.merchantName,
+        data.name,
+        data.address,
+        data.latitude ?? null,
+        data.longitude ?? null,
+        data.image || null,
+        data.logo || null,
+        data.contactEmail || null,
+        data.phone || null,
+        data.instagram || null,
+        data.facebook || null,
+        data.tiktok || null,
+        data.website || null,
+        data.cardBackgroundImage || null,
+        data.cardColor || null,
+        data.cardUseCover ?? false,
+      ];
+      await client.query(barQuery, barValues);
+
+      // 2. Crea le offerte (se presenti)
+      if (data.offers && data.offers.length > 0) {
+        for (const offer of data.offers) {
+          const offerId = ulid();
+          await client.query(
+            `INSERT INTO offers (id, bar_id, title, description, conditions, points_required, is_active, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)`,
+            [
+              offerId,
+              barId,
+              offer.title,
+              offer.description ?? null,
+              offer.conditions ?? null,
+              offer.pointsRequired,
+              offer.isActive ?? true,
+            ]
+          );
+        }
+      }
+
+      // 3. Salva gli orari (se presenti)
+      if (data.openingHours && data.openingHours.length > 0) {
+        for (const day of data.openingHours) {
+          await client.query(
+            `INSERT INTO opening_hours (bar_id, day_of_week, is_closed, time_ranges, updated_at)
+             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+             ON CONFLICT (bar_id, day_of_week) DO UPDATE SET
+               is_closed = EXCLUDED.is_closed,
+               time_ranges = EXCLUDED.time_ranges,
+               updated_at = CURRENT_TIMESTAMP`,
+            [barId, day.dayOfWeek, day.isClosed, JSON.stringify(day.timeRanges)]
+          );
+        }
+      }
+
+      await client.query("COMMIT");
+      console.log(`✅ Bar creato completamente con ID: ${barId}`);
+      return barId;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("❌ Errore durante la creazione completa del bar:", error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 // Singleton instance

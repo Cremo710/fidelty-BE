@@ -137,6 +137,11 @@ async function createServer(): Promise<FastifyInstance> {
     return barController.register(request, reply);
   });
 
+  // Complete bar registration - atomic, no partial data (protected route)
+  app.post("/api/bar/complete-registration", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.completeRegistration(request, reply);
+  });
+
   // Get bar profile (protected route)
   app.get("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
     return barController.getBarByUser(request, reply);

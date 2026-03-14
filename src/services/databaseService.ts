@@ -117,6 +117,8 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_loyalty_cards_bar_id ON loyalty_cards(bar_id);
 
       -- Estensione tabella bars: nuovi campi per il flusso di onboarding
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS logo TEXT;
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS contact_email VARCHAR(255);
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
