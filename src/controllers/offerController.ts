@@ -83,6 +83,40 @@ export class OfferController {
   }
 
   /**
+   * Lista le offerte attive di un bar dato il suo ID (endpoint pubblico)
+   */
+  async listOffersByBarId(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const { barId } = request.params as { barId: string };
+      if (!barId) {
+        return reply.status(400).send({ success: false, error: "barId mancante", code: "MISSING_PARAM" });
+      }
+
+      const offers = await offerRepository.getOffersByBarId(barId);
+
+      return reply.status(200).send({
+        success: true,
+        data: offers
+          .filter((o) => o.is_active)
+          .map((o) => ({
+            id: o.id,
+            title: o.title,
+            description: o.description,
+            conditions: o.conditions,
+            pointsRequired: o.points_required,
+            validFrom: o.valid_from,
+            validUntil: o.valid_until,
+            isActive: o.is_active,
+            createdAt: o.created_at,
+          })),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "LIST_ERROR" });
+    }
+  }
+
+  /**
    * Aggiorna un'offerta esistente
    */
   async updateOffer(request: FastifyRequest, reply: FastifyReply) {

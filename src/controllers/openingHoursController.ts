@@ -71,6 +71,32 @@ export class OpeningHoursController {
       return reply.status(500).send({ success: false, error: errorMessage, code: "GET_HOURS_ERROR" });
     }
   }
+
+  /**
+   * Recupera gli orari di apertura di un bar dato il suo ID (endpoint pubblico)
+   */
+  async getOpeningHoursByBarId(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const { barId } = request.params as { barId: string };
+      if (!barId) {
+        return reply.status(400).send({ success: false, error: "barId mancante", code: "MISSING_PARAM" });
+      }
+
+      const hours = await openingHoursRepository.getOpeningHours(barId);
+
+      return reply.status(200).send({
+        success: true,
+        data: hours.map((h) => ({
+          dayOfWeek: h.day_of_week,
+          isClosed: h.is_closed,
+          timeRanges: h.time_ranges,
+        })),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "GET_HOURS_ERROR" });
+    }
+  }
 }
 
 export const openingHoursController = new OpeningHoursController();

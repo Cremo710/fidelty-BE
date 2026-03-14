@@ -157,6 +157,16 @@ async function createServer(): Promise<FastifyInstance> {
     return barController.listBars(request, reply);
   });
 
+  // Public endpoint: get offers for a specific bar
+  app.get("/api/bars/:barId/offers", async (request, reply) => {
+    return offerController.listOffersByBarId(request, reply);
+  });
+
+  // Public endpoint: get opening hours for a specific bar
+  app.get("/api/bars/:barId/opening-hours", async (request, reply) => {
+    return openingHoursController.getOpeningHoursByBarId(request, reply);
+  });
+
   // ==================== BAR CARD CONFIG ENDPOINTS ====================
 
   // Update bar card configuration (Step 2 onboarding)
