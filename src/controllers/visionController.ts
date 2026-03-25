@@ -59,41 +59,59 @@ function parseReceiptText(text: string): ParsedReceipt {
     totalAmount = parseFloat(totalMatch[1].replace(",", "."));
   }
 
-  // --- Data (DD/MM/YYYY o DD-MM-YYYY o DD.MM.YYYY) ---
+  // --- Data (DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY oppure DD/MM/YY) ---
   let date: string | null = null;
-  const dateRegex = /\b(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})\b/;
-  const dateMatch = text.match(dateRegex);
-  if (dateMatch) {
-    const [, day, month, year] = dateMatch;
+  const dateRegex4 = /\b(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})\b/;
+  const dateRegex2 = /\b(\d{2})[\/\-.](\d{2})[\/\-.](\d{2})\b/;
+  const dateMatch4 = text.match(dateRegex4);
+  if (dateMatch4) {
+    const [, day, month, year] = dateMatch4;
     date = `${year}-${month}-${day}`;
+  } else {
+    const dateMatch2 = text.match(dateRegex2);
+    if (dateMatch2) {
+      const [, day, month, shortYear] = dateMatch2;
+      const fullYear = parseInt(shortYear, 10) > 50 ? `19${shortYear}` : `20${shortYear}`;
+      date = `${fullYear}-${month}-${day}`;
+    }
   }
 
-  // --- Nome esercente (prime righe prima della P.IVA o indirizzo) ---
+  // --- Indirizzo (cerca righe con VIA, PIAZZA, CORSO, etc.) ---
+  const addressRegex = /\b(VIA|V\.LE|VIALE|PIAZZA|P\.ZA|P\.ZZA|CORSO|C\.SO|LARGO|LOC\.|LOCALITA)\b/i;
+  let merchantAddress: string | null = null;
+  const addressLineIdx = lines.findIndex((l) => addressRegex.test(l));
+  if (addressLineIdx >= 0) {
+    merchantAddress = lines[addressLineIdx];
+    // Se la riga dopo contiene CAP + città (es. "22100 Como"), accodala
+    const nextLine = lines[addressLineIdx + 1];
+    if (nextLine && /^\d{5}\s+\S/.test(nextLine)) {
+      merchantAddress += ", " + nextLine;
+    }
+  }
+
+  // --- Nome esercente (righe prima dell'indirizzo o della P.IVA, escludendo indirizzo/CAP) ---
   let merchantName: string | null = null;
   const pivaLineIdx = lines.findIndex((l) => /P\.?\s*IVA|PARTITA\s*IVA/i.test(l));
-  // Prendi le prime righe significative (no date, no numeri puri)
+  const stopIdx = addressLineIdx >= 0
+    ? addressLineIdx
+    : pivaLineIdx >= 0
+      ? pivaLineIdx
+      : Math.min(3, lines.length);
+
   const nameLines: string[] = [];
-  const nameLimit = pivaLineIdx > 0 ? Math.min(pivaLineIdx, 3) : 3;
-  for (let i = 0; i < Math.min(nameLimit, lines.length); i++) {
+  for (let i = 0; i < stopIdx; i++) {
     const line = lines[i];
-    // Salta righe che sembrano date, numeri puri, o contengono P.IVA
     if (/^\d+[\/\-.]/.test(line)) continue;
     if (/^[\d\s.,]+$/.test(line)) continue;
     if (/P\.?\s*IVA/i.test(line)) continue;
+    if (addressRegex.test(line)) continue;
+    if (/^\d{5}\s/.test(line)) continue;
     if (line.length > 2) {
       nameLines.push(line);
     }
   }
   if (nameLines.length > 0) {
     merchantName = nameLines.join(" ");
-  }
-
-  // --- Indirizzo (cerca righe con VIA, PIAZZA, CORSO, etc.) ---
-  let merchantAddress: string | null = null;
-  const addressRegex = /\b(VIA|V\.LE|VIALE|PIAZZA|P\.ZA|P\.ZZA|CORSO|C\.SO|LARGO|LOC\.|LOCALITA)\b/i;
-  const addressLine = lines.find((l) => addressRegex.test(l));
-  if (addressLine) {
-    merchantAddress = addressLine;
   }
 
   return {
