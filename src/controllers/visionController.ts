@@ -2,13 +2,21 @@ import type { FastifyRequest, FastifyReply } from "fastify";
 import { extractTextFromImage } from "../services/visionService.js";
 import { isImageFile } from "../utils/imageUpload.js";
 
+interface ParsedReceiptField {
+  data: string | number | null;
+  text: string | null;
+  confidenceLevel?: number;
+}
+
 interface ParsedReceipt {
-  merchantTaxId: string | null;
-  docId: string | null;
-  merchantName: string | null;
-  totalAmount: number | null;
-  date: string | null;
-  merchantAddress: string | null;
+  merchantTaxId: ParsedReceiptField;
+  merchantName: ParsedReceiptField;
+  totalAmount: ParsedReceiptField;
+  date: ParsedReceiptField;
+  merchantAddress: ParsedReceiptField;
+  entities: {
+    receiptNumber: { data: string | null };
+  };
   rawText: string;
 }
 
@@ -89,12 +97,14 @@ function parseReceiptText(text: string): ParsedReceipt {
   }
 
   return {
-    merchantTaxId,
-    docId,
-    merchantName,
-    totalAmount,
-    date,
-    merchantAddress,
+    merchantTaxId: { data: merchantTaxId, text: merchantTaxId },
+    merchantName: { data: merchantName, text: merchantName },
+    totalAmount: { data: totalAmount, text: totalAmount != null ? String(totalAmount) : null },
+    date: { data: date, text: date },
+    merchantAddress: { data: merchantAddress, text: merchantAddress },
+    entities: {
+      receiptNumber: { data: docId },
+    },
     rawText: text,
   };
 }
@@ -134,7 +144,7 @@ class VisionController {
 
       const parsed = parseReceiptText(text);
 
-      if (!parsed.merchantTaxId) {
+      if (!parsed.merchantTaxId.data) {
         return reply.status(400).send({
           success: false,
           error: "Partita IVA non trovata nello scontrino",
@@ -143,7 +153,7 @@ class VisionController {
         });
       }
 
-      if (!parsed.docId) {
+      if (!parsed.entities.receiptNumber.data) {
         return reply.status(400).send({
           success: false,
           error: "Numero documento non trovato nello scontrino",
@@ -152,7 +162,7 @@ class VisionController {
         });
       }
 
-      console.log(`✅ Scontrino parsed - P.IVA: ${parsed.merchantTaxId}, DOC: ${parsed.docId}`);
+      console.log(`✅ Scontrino parsed - P.IVA: ${parsed.merchantTaxId.data}, DOC: ${parsed.entities.receiptNumber.data}`);
 
       return reply.status(200).send({
         success: true,
