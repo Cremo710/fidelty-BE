@@ -13,6 +13,7 @@ interface ParsedReceipt {
   merchantName: ParsedReceiptField;
   totalAmount: ParsedReceiptField;
   date: ParsedReceiptField;
+  time: ParsedReceiptField;
   merchantAddress: ParsedReceiptField;
   entities: {
     receiptNumber: { data: string | null };
@@ -59,20 +60,44 @@ function parseReceiptText(text: string): ParsedReceipt {
     totalAmount = parseFloat(totalMatch[1].replace(",", "."));
   }
 
-  // --- Data (DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY oppure DD/MM/YY) ---
+  // --- Data e Ora (DD/MM/YYYY HH:MM o DD/MM/YY HH:MM) ---
   let date: string | null = null;
-  const dateRegex4 = /\b(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})\b/;
-  const dateRegex2 = /\b(\d{2})[\/\-.](\d{2})[\/\-.](\d{2})\b/;
-  const dateMatch4 = text.match(dateRegex4);
-  if (dateMatch4) {
-    const [, day, month, year] = dateMatch4;
+  let time: string | null = null;
+  const dateTimeRegex4 = /(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})\s+(\d{2}:\d{2})/;
+  const dateTimeRegex2 = /(\d{2})[\/\-.](\d{2})[\/\-.](\d{2})\s+(\d{2}:\d{2})/;
+  const dtMatch4 = text.match(dateTimeRegex4);
+  if (dtMatch4) {
+    const [, day, month, year, t] = dtMatch4;
     date = `${year}-${month}-${day}`;
+    time = t;
   } else {
-    const dateMatch2 = text.match(dateRegex2);
-    if (dateMatch2) {
-      const [, day, month, shortYear] = dateMatch2;
+    const dtMatch2 = text.match(dateTimeRegex2);
+    if (dtMatch2) {
+      const [, day, month, shortYear, t] = dtMatch2;
       const fullYear = parseInt(shortYear, 10) > 50 ? `19${shortYear}` : `20${shortYear}`;
       date = `${fullYear}-${month}-${day}`;
+      time = t;
+    } else {
+      // Fallback: solo data senza ora
+      const dateOnly4 = text.match(/\b(\d{2})[\/\-.](\d{2})[\/\-.](\d{4})\b/);
+      if (dateOnly4) {
+        const [, day, month, year] = dateOnly4;
+        date = `${year}-${month}-${day}`;
+      } else {
+        const dateOnly2 = text.match(/\b(\d{2})[\/\-.](\d{2})[\/\-.](\d{2})\b/);
+        if (dateOnly2) {
+          const [, day, month, shortYear] = dateOnly2;
+          const fullYear = parseInt(shortYear, 10) > 50 ? `19${shortYear}` : `20${shortYear}`;
+          date = `${fullYear}-${month}-${day}`;
+        }
+      }
+      // Fallback: cerca ora isolata (HH:MM)
+      if (!time) {
+        const timeOnly = text.match(/\b(\d{2}:\d{2})\b/);
+        if (timeOnly) {
+          time = timeOnly[1];
+        }
+      }
     }
   }
 
@@ -119,6 +144,7 @@ function parseReceiptText(text: string): ParsedReceipt {
     merchantName: { data: merchantName, text: merchantName },
     totalAmount: { data: totalAmount, text: totalAmount != null ? String(totalAmount) : null },
     date: { data: date, text: date },
+    time: { data: time, text: time },
     merchantAddress: { data: merchantAddress, text: merchantAddress },
     entities: {
       receiptNumber: { data: docId },
