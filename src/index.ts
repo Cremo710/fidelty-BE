@@ -11,6 +11,7 @@ import { loyaltyCardRepository } from "./repositories/loyaltyCardRepository.js";
 import { userRepository } from "./repositories/userRepository.js";
 import { offerController } from "./controllers/offerController.js";
 import { openingHoursController } from "./controllers/openingHoursController.js";
+import { visionController } from "./controllers/visionController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 
@@ -223,6 +224,13 @@ async function createServer(): Promise<FastifyInstance> {
   // Loyalty cards endpoint for authenticated user
   app.get("/api/receipts/my-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
     return receiptsController.getMyLoyaltyCards(request, reply);
+  });
+
+  // ==================== VISION / OCR ENDPOINTS ====================
+
+  // Extract text from image via Google Cloud Vision
+  app.post("/api/vision/extract-text", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return visionController.extractText(request, reply);
   });
 
   // Graceful shutdown

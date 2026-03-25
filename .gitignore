@@ -10,3 +10,7 @@ package-lock.json
 .idea/
 # uploads
 uploads/
+# Google service account credentials
+*.json
+!package.json
+!tsconfig.json
