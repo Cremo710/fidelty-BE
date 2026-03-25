@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { extractTextFromImage } from "../services/visionService.js";
 import { isImageFile } from "../utils/imageUpload.js";
+import { barRepository } from "../repositories/barRepository.js";
 
 interface ParsedReceiptField {
   data: string | number | null;
@@ -208,9 +209,34 @@ class VisionController {
 
       console.log(`✅ Scontrino parsed - P.IVA: ${parsed.merchantTaxId.data}, DOC: ${parsed.entities.receiptNumber.data}`);
 
+      // Normalizza la P.IVA e cerca il bar associato
+      const normalizedPiva = String(parsed.merchantTaxId.data).replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+      const bar = await barRepository.findByPiva(normalizedPiva);
+
+      if (!bar) {
+        return reply.status(404).send({
+          success: false,
+          error: `Nessun bar registrato trovato con P.IVA ${normalizedPiva}. Lo scontrino non è associabile a un bar affiliato.`,
+          code: "BAR_NOT_FOUND",
+          data: parsed,
+        });
+      }
+
+      console.log(`✅ Bar trovato: ${bar.name} (ID: ${bar.id})`);
+
       return reply.status(200).send({
         success: true,
-        data: parsed,
+        data: {
+          ...parsed,
+          bar: {
+            id: bar.id,
+            name: bar.name,
+            merchantName: bar.merchant_name,
+            address: bar.address,
+            image: bar.image,
+            logo: bar.logo,
+          },
+        },
       });
     } catch (error) {
       console.error("❌ Errore nell'estrazione del testo:", error);
