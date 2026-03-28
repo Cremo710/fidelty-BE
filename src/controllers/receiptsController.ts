@@ -297,6 +297,64 @@ class ReceiptsController {
       });
     }
   }
+
+  /**
+   * Cancella una ricevuta e riallinea la loyalty card.
+   */
+  async deleteReceipt(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = request.userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Utente non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const { id } = request.params as { id: string };
+      if (!id) {
+        return reply.status(400).send({ success: false, error: "ID ricevuta mancante", code: "MISSING_ID" });
+      }
+
+      // Verifica che la ricevuta appartenga all'utente
+      const pool = databaseService.getPool();
+      const { rows } = await pool.query("SELECT user_id FROM receipts WHERE id = $1", [id]);
+      if (rows.length === 0) {
+        return reply.status(404).send({ success: false, error: "Ricevuta non trovata", code: "NOT_FOUND" });
+      }
+      if (rows[0].user_id !== userId) {
+        return reply.status(403).send({ success: false, error: "Non autorizzato", code: "FORBIDDEN" });
+      }
+
+      await databaseService.deleteReceipt(id);
+
+      return reply.status(200).send({
+        success: true,
+        message: "Ricevuta cancellata e loyalty card riallineata",
+      });
+    } catch (error) {
+      console.error("❌ Errore durante la cancellazione della ricevuta:", error);
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage });
+    }
+  }
+
+  /**
+   * Ricalcola tutte le loyalty cards dalle ricevute effettive.
+   * Utile per riparare disallineamenti.
+   */
+  async recalculateCards(_request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const result = await databaseService.recalculateAllCards();
+
+      return reply.status(200).send({
+        success: true,
+        message: `Ricalcolo completato: ${result.updated} card aggiornate, ${result.removed} card orfane rimosse`,
+        data: result,
+      });
+    } catch (error) {
+      console.error("❌ Errore durante il ricalcolo:", error);
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage });
+    }
+  }
 }
 
 // Istanza singleton del controller

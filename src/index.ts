@@ -226,6 +226,16 @@ async function createServer(): Promise<FastifyInstance> {
     return receiptsController.getMyLoyaltyCards(request, reply);
   });
 
+  // Delete a receipt and recalculate loyalty card (protected)
+  app.delete("/api/receipts/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return receiptsController.deleteReceipt(request, reply);
+  });
+
+  // Recalculate all loyalty cards from receipts (protected, admin utility)
+  app.post("/api/receipts/recalculate-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return receiptsController.recalculateCards(request, reply);
+  });
+
   // ==================== VISION / OCR ENDPOINTS ====================
 
   // Extract text from image via Google Cloud Vision

@@ -411,6 +411,143 @@ export class DatabaseService {
     }
   }
 
+  /**
+   * Cancella una ricevuta e riallinea la loyalty card corrispondente
+   * in un'unica transazione atomica.
+   */
+  async deleteReceipt(receiptId: string): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Recupera i dati della ricevuta prima di cancellarla
+      const { rows } = await client.query(
+        "SELECT user_id, bar_id, points_earned FROM receipts WHERE id = $1",
+        [receiptId],
+      );
+
+      if (rows.length === 0) {
+        await client.query("ROLLBACK");
+        throw new Error(`Ricevuta ${receiptId} non trovata`);
+      }
+
+      const { user_id, bar_id } = rows[0];
+
+      // Cancella fraud flags collegati
+      await client.query("DELETE FROM fraud_flags WHERE receipt_id = $1", [receiptId]);
+
+      // Cancella la ricevuta
+      await client.query("DELETE FROM receipts WHERE id = $1", [receiptId]);
+
+      // Riallinea la loyalty card ricalcolando da tutte le ricevute rimanenti
+      if (user_id && bar_id) {
+        await this.recalculateCardInTransaction(client, user_id, bar_id);
+      }
+
+      await client.query("COMMIT");
+      console.log(`🗑️  Ricevuta ${receiptId} cancellata e loyalty card riallineata`);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("❌ Errore durante la cancellazione della ricevuta:", error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Ricalcola una loyalty card da zero basandosi sulle ricevute effettive.
+   * Se non ci sono più ricevute, rimuove la card.
+   */
+  async recalculateCardInTransaction(
+    client: import("pg").PoolClient,
+    userId: string,
+    barId: string,
+  ): Promise<void> {
+    const { rows } = await client.query(
+      `SELECT
+         COALESCE(SUM(points_earned), 0)::int AS total_points,
+         COUNT(*)::int AS receipts_count,
+         MAX(created_at) AS last_receipt_at
+       FROM receipts
+       WHERE user_id = $1 AND bar_id = $2`,
+      [userId, barId],
+    );
+
+    const { total_points, receipts_count, last_receipt_at } = rows[0];
+
+    if (receipts_count === 0) {
+      // Nessuna ricevuta rimasta → rimuovi la loyalty card
+      await client.query(
+        "DELETE FROM loyalty_cards WHERE user_id = $1 AND bar_id = $2",
+        [userId, barId],
+      );
+      console.log(`🗑️  Loyalty card rimossa per user=${userId}, bar=${barId} (nessuna ricevuta)`);
+    } else {
+      await client.query(
+        `UPDATE loyalty_cards
+         SET points = $1, receipts_count = $2, last_receipt_at = $3, updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $4 AND bar_id = $5`,
+        [total_points, receipts_count, last_receipt_at, userId, barId],
+      );
+      console.log(`🔄 Loyalty card riallineata: user=${userId}, bar=${barId} → ${total_points} punti, ${receipts_count} ricevute`);
+    }
+  }
+
+  /**
+   * Ricalcola TUTTE le loyalty cards dalle ricevute effettive.
+   * Rimuove anche le card orfane (senza ricevute).
+   */
+  async recalculateAllCards(): Promise<{ updated: number; removed: number }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Ricalcola tutte le card con ricevute
+      const upsertResult = await client.query(`
+        INSERT INTO loyalty_cards (user_id, bar_id, points, receipts_count, last_receipt_at, created_at, updated_at)
+        SELECT
+          r.user_id,
+          r.bar_id,
+          COALESCE(SUM(r.points_earned), 0)::int,
+          COUNT(r.id)::int,
+          MAX(r.created_at),
+          MIN(r.created_at),
+          CURRENT_TIMESTAMP
+        FROM receipts r
+        WHERE r.user_id IS NOT NULL AND r.bar_id IS NOT NULL
+        GROUP BY r.user_id, r.bar_id
+        ON CONFLICT (user_id, bar_id) DO UPDATE SET
+          points = EXCLUDED.points,
+          receipts_count = EXCLUDED.receipts_count,
+          last_receipt_at = EXCLUDED.last_receipt_at,
+          updated_at = CURRENT_TIMESTAMP
+      `);
+
+      // Rimuovi card orfane (senza ricevute corrispondenti)
+      const removeResult = await client.query(`
+        DELETE FROM loyalty_cards lc
+        WHERE NOT EXISTS (
+          SELECT 1 FROM receipts r
+          WHERE r.user_id = lc.user_id AND r.bar_id = lc.bar_id
+        )
+      `);
+
+      await client.query("COMMIT");
+
+      const updated = upsertResult.rowCount || 0;
+      const removed = removeResult.rowCount || 0;
+      console.log(`✅ Ricalcolo completato: ${updated} card aggiornate, ${removed} card orfane rimosse`);
+      return { updated, removed };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("❌ Errore durante il ricalcolo delle carte:", error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async closePool(): Promise<void> {
     await this.pool.end();
     console.log("🗄️  Pool di connessioni PostgreSQL chiuso");
