@@ -3,6 +3,26 @@ import { extractTextFromImage } from "../services/visionService.js";
 import { isImageFile } from "../utils/imageUpload.js";
 import { barRepository } from "../repositories/barRepository.js";
 import { databaseService } from "../services/databaseService.js";
+import {
+  computeImageHash,
+  validateReceiptFields,
+  extractExifInfo,
+  type ParsedReceiptData,
+} from "../services/receiptValidationService.js";
+import {
+  computeTrustScore,
+  applyTrustScore,
+  type TrustScoreBreakdown,
+} from "../services/trustScoreService.js";
+import {
+  buildDuplicationContext,
+  getUserBehaviorStats,
+  detectFraudPatterns,
+  countIdenticalTotals,
+  checkRateLimit,
+  isUserBanned,
+  type FraudFlag,
+} from "../services/fraudDetectionService.js";
 
 interface ParsedReceiptField {
   data: string | number | null;
@@ -158,6 +178,26 @@ function parseReceiptText(text: string): ParsedReceipt {
 class VisionController {
   async extractText(request: FastifyRequest, reply: FastifyReply) {
     try {
+      const userId = request.userId;
+
+      // ── Anti-Abuse: ban check ──
+      if (userId && await isUserBanned(userId)) {
+        return reply.status(403).send({
+          success: false,
+          error: "Il tuo account è stato sospeso. Contatta l'assistenza.",
+          code: "USER_BANNED",
+        });
+      }
+
+      // ── Anti-Abuse: rate limit ──
+      if (userId && !checkRateLimit(userId)) {
+        return reply.status(429).send({
+          success: false,
+          error: "Troppe richieste. Riprova tra un minuto.",
+          code: "RATE_LIMITED",
+        });
+      }
+
       const data = await request.file();
 
       if (!data) {
@@ -178,6 +218,19 @@ class VisionController {
 
       const buffer = await data.toBuffer();
 
+      // ── Layer 3: Image authenticity – EXIF analysis ──
+      const exifInfo = extractExifInfo(buffer);
+      if (exifInfo.isScreenshot) {
+        console.log("⚠️  Screenshot rilevato");
+      }
+      if (exifInfo.isEdited) {
+        console.log(`⚠️  Immagine modificata rilevata (software: ${exifInfo.software})`);
+      }
+
+      // ── Layer 1: Image hash for duplicate image detection ──
+      const imageHash = computeImageHash(buffer);
+
+      // ── OCR ──
       const text = await extractTextFromImage(buffer);
 
       if (!text || text.trim().length === 0) {
@@ -190,6 +243,32 @@ class VisionController {
 
       const parsed = parseReceiptText(text);
 
+      // ── Layer 1: Basic field validation ──
+      const parsedData: ParsedReceiptData = {
+        docId: parsed.entities.receiptNumber.data,
+        merchantTaxId: parsed.merchantTaxId.data as string | null,
+        merchantName: parsed.merchantName.data as string | null,
+        totalAmount: parsed.totalAmount.data as number | null,
+        date: parsed.date.data as string | null,
+        time: parsed.time.data as string | null,
+        merchantAddress: parsed.merchantAddress.data as string | null,
+        rawText: parsed.rawText,
+      };
+
+      const validation = validateReceiptFields(parsedData);
+
+      // Hard rejects
+      if (!validation.valid) {
+        console.log(`❌ Validazione fallita: ${validation.errors.join(", ")}`);
+        return reply.status(400).send({
+          success: false,
+          error: validation.errors.join("; "),
+          code: "VALIDATION_FAILED",
+          data: parsed,
+          warnings: validation.warnings,
+        });
+      }
+
       if (!parsed.merchantTaxId.data) {
         return reply.status(400).send({
           success: false,
@@ -199,20 +278,27 @@ class VisionController {
         });
       }
 
-      if (!parsed.entities.receiptNumber.data) {
-        return reply.status(400).send({
-          success: false,
-          error: "Numero documento non trovato nello scontrino",
-          code: "MISSING_DOC_ID",
-          data: parsed,
-        });
-      }
-
       console.log(`✅ Scontrino parsed - P.IVA: ${parsed.merchantTaxId.data}, DOC: ${parsed.entities.receiptNumber.data}`);
 
-      // Controlla se il docId è già presente nel database
-      const existingReceipt = await databaseService.getReceipt(String(parsed.entities.receiptNumber.data));
-      if (existingReceipt) {
+      // ── Layer 2: Duplicate & similarity detection ──
+      const duplicationCtx = await buildDuplicationContext(
+        imageHash,
+        parsedData.docId,
+        parsedData.totalAmount,
+        parsedData.date,
+        parsedData.merchantTaxId,
+        userId || "__anonymous__",
+      );
+
+      // Hard reject on exact duplicates
+      if (duplicationCtx.isImageDuplicate) {
+        return reply.status(409).send({
+          success: false,
+          error: "Questa immagine è già stata caricata nel sistema",
+          code: "DUPLICATE_IMAGE",
+        });
+      }
+      if (duplicationCtx.isDocIdDuplicate) {
         return reply.status(409).send({
           success: false,
           error: "Ricevuta già caricata nel sistema",
@@ -220,7 +306,7 @@ class VisionController {
         });
       }
 
-      // Normalizza la P.IVA e cerca il bar associato
+      // ── Normalizza la P.IVA e cerca il bar associato ──
       const normalizedPiva = String(parsed.merchantTaxId.data).replace(/[^0-9A-Za-z]/g, "").toUpperCase();
       const bar = await barRepository.findByPiva(normalizedPiva);
 
@@ -235,6 +321,36 @@ class VisionController {
 
       console.log(`✅ Bar trovato: ${bar.name} (ID: ${bar.id})`);
 
+      // ── Layer 4: Trust Score ──
+      const userStats = userId
+        ? await getUserBehaviorStats(userId)
+        : { receiptsToday: 0, pointsToday: 0, avgTrustScore: null, totalReceipts: 0, isFlagged: false };
+
+      const trustScore: TrustScoreBreakdown = computeTrustScore(
+        parsedData,
+        { barPivaMatches: true, exif: exifInfo },
+        duplicationCtx,
+        userStats,
+      );
+
+      const { status, effectivePoints } = applyTrustScore(trustScore.total, 0);
+
+      // ── Fraud flags (soft: stored but not blocking) ──
+      const identicalTotalCount = (userId && parsedData.totalAmount)
+        ? await countIdenticalTotals(userId, parsedData.totalAmount)
+        : 0;
+      const fraudFlags: FraudFlag[] = detectFraudPatterns(duplicationCtx, userStats, identicalTotalCount);
+
+      if (fraudFlags.length > 0) {
+        console.log(`🚩 Fraud flags: ${fraudFlags.map((f) => f.reason).join(", ")}`);
+      }
+
+      // ── Daily limit check (soft warning, not blocking at scan time) ──
+      const warnings: string[] = [...validation.warnings];
+      if (userStats.receiptsToday >= 8) {
+        warnings.push("Stai raggiungendo il limite giornaliero di ricevute");
+      }
+
       return reply.status(200).send({
         success: true,
         data: {
@@ -247,6 +363,13 @@ class VisionController {
             image: bar.image,
             logo: bar.logo,
           },
+          // Fraud prevention metadata sent to FE for transparency
+          imageHash,
+          trustScore: trustScore.total,
+          trustBreakdown: trustScore,
+          receiptStatus: status,
+          warnings,
+          fraudFlags: fraudFlags.map((f) => f.reason),
         },
       });
     } catch (error) {

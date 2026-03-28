@@ -161,6 +161,36 @@ export class DatabaseService {
       );
 
       CREATE INDEX IF NOT EXISTS idx_opening_hours_bar_id ON opening_hours(bar_id);
+
+      -- ═══ Fraud Prevention: nuove colonne su receipts ═══
+      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS image_hash VARCHAR(64);
+      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS trust_score INTEGER;
+      ALTER TABLE receipts ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'approved';
+
+      CREATE INDEX IF NOT EXISTS idx_receipts_image_hash ON receipts(image_hash);
+      CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(status);
+
+      -- ═══ Fraud Flags ═══
+      CREATE TABLE IF NOT EXISTS fraud_flags (
+        id SERIAL PRIMARY KEY,
+        receipt_id VARCHAR(26) NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+        reason TEXT NOT NULL,
+        severity VARCHAR(10) NOT NULL DEFAULT 'low',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_fraud_flags_receipt_id ON fraud_flags(receipt_id);
+
+      -- ═══ User Fraud Stats ═══
+      CREATE TABLE IF NOT EXISTS user_fraud_stats (
+        user_id VARCHAR(26) PRIMARY KEY REFERENCES utenti(id) ON DELETE CASCADE,
+        avg_trust_score FLOAT DEFAULT 0,
+        total_receipts INTEGER DEFAULT 0,
+        is_flagged BOOLEAN DEFAULT FALSE,
+        is_banned BOOLEAN DEFAULT FALSE,
+        last_receipt_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
@@ -246,14 +276,20 @@ export class DatabaseService {
         total_amount,
         purchase_date,
         line_items,
+        image_hash,
+        trust_score,
+        status,
         updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
       ON CONFLICT (doc_id) DO UPDATE SET
         user_id = EXCLUDED.user_id,
         bar_id = EXCLUDED.bar_id,
         points_earned = EXCLUDED.points_earned,
         merchant_name = EXCLUDED.merchant_name,
         total_amount = EXCLUDED.total_amount,
+        image_hash = COALESCE(EXCLUDED.image_hash, receipts.image_hash),
+        trust_score = COALESCE(EXCLUDED.trust_score, receipts.trust_score),
+        status = COALESCE(EXCLUDED.status, receipts.status),
         updated_at = CURRENT_TIMESTAMP
       RETURNING id
     `;
@@ -276,6 +312,9 @@ export class DatabaseService {
         Number.isFinite(parsedBillAmount) ? parsedBillAmount : 0, // $9: total_amount
         receiptData.billDate || null, // $10: purchase_date
         JSON.stringify(receiptData.lineItems || []), // $11: line_items (come stringa JSON)
+        receiptData.imageHash || null, // $12: image_hash
+        receiptData.trustScore ?? null, // $13: trust_score
+        receiptData.status || "approved", // $14: status
       ];
 
       const receiptResult = await client.query(

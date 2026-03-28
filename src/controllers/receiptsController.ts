@@ -1,6 +1,14 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import { databaseService } from "../services/databaseService.js";
 import { barRepository } from "../repositories/barRepository.js";
+import { applyTrustScore } from "../services/trustScoreService.js";
+import {
+  saveFraudFlags,
+  upsertUserFraudStats,
+  isUserBanned,
+  checkRateLimit,
+  type FraudFlag,
+} from "../services/fraudDetectionService.js";
 
 function normalizeVatNumber(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -150,37 +158,87 @@ class ReceiptsController {
         });
       }
 
+      // ── Anti-Abuse: ban check ──
+      if (await isUserBanned(userId)) {
+        return reply.status(403).send({
+          status: "ERROR",
+          error: "Il tuo account è stato sospeso. Contatta l'assistenza.",
+          code: "USER_BANNED",
+        });
+      }
+
+      // ── Anti-Abuse: rate limit ──
+      if (!checkRateLimit(userId)) {
+        return reply.status(429).send({
+          status: "ERROR",
+          error: "Troppe richieste. Riprova tra un minuto.",
+          code: "RATE_LIMITED",
+        });
+      }
+
       const data = (request.body || {}) as Record<string, unknown>;
 
       console.log("📋 Ricevuta richiesta di conferma ricevuta");
-      console.log("Dati ricevuti:", data);
 
       const normalizedPiva = normalizeVatNumber(data.pIva);
       const matchedBar = normalizedPiva
         ? await barRepository.findByPiva(normalizedPiva)
         : null;
-      const pointsEarned = computeEarnedPoints(data.billAmount, Boolean(matchedBar));
+
+      // Compute raw points based on amount
+      const rawPoints = computeEarnedPoints(data.billAmount, Boolean(matchedBar));
+
+      // ── Trust Score: adjust points based on trust score from vision step ──
+      const trustScore = typeof data.trustScore === "number" ? data.trustScore : 100;
+      const { status: receiptStatus, effectivePoints } = applyTrustScore(trustScore, rawPoints);
+
+      console.log(
+        `🔒 Trust score: ${trustScore} → status: ${receiptStatus}, points: ${rawPoints} → ${effectivePoints}`,
+      );
 
       const payload = {
         ...data,
         pIva: normalizedPiva,
         userId,
         barId: matchedBar?.id || null,
-        pointsEarned,
+        pointsEarned: effectivePoints,
+        imageHash: typeof data.imageHash === "string" ? data.imageHash : null,
+        trustScore,
+        status: receiptStatus,
       };
 
       // Salva i dati della ricevuta nel database
       const receiptId = await databaseService.saveReceipt(payload);
 
+      // ── Persist fraud flags if present ──
+      const fraudFlags = Array.isArray(data.fraudFlags) ? data.fraudFlags as string[] : [];
+      if (fraudFlags.length > 0) {
+        const flags: FraudFlag[] = fraudFlags.map((reason) => ({
+          reason: String(reason),
+          severity: "medium" as const,
+        }));
+        await saveFraudFlags(receiptId, flags);
+      }
+
+      // ── Update user fraud stats ──
+      await upsertUserFraudStats(userId, trustScore);
+
       return reply.status(200).send({
         status: "OK",
         receiptId: receiptId,
-        message: "Ricevuta salvata con successo",
+        message: receiptStatus === "rejected"
+          ? "Ricevuta salvata ma non approvata. Nessun punto assegnato."
+          : receiptStatus === "partial"
+            ? "Ricevuta salvata con punteggio parziale."
+            : "Ricevuta salvata con successo",
         data: {
           matchedBar: Boolean(matchedBar),
           barId: matchedBar?.id || null,
           barName: matchedBar?.name || null,
-          pointsEarned,
+          pointsEarned: effectivePoints,
+          rawPoints,
+          trustScore,
+          receiptStatus,
         },
       });
     } catch (error) {
