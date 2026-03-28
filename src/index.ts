@@ -12,6 +12,7 @@ import { userRepository } from "./repositories/userRepository.js";
 import { offerController } from "./controllers/offerController.js";
 import { openingHoursController } from "./controllers/openingHoursController.js";
 import { visionController } from "./controllers/visionController.js";
+import { friendsController } from "./controllers/friendsController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 
@@ -234,6 +235,23 @@ async function createServer(): Promise<FastifyInstance> {
   // Recalculate all loyalty cards from receipts (protected, admin utility)
   app.post("/api/receipts/recalculate-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
     return receiptsController.recalculateCards(request, reply);
+  });
+
+  // ==================== FRIENDS ENDPOINTS ====================
+
+  // Add a friend by public_id
+  app.post("/api/friends/add", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return friendsController.addFriend(request, reply);
+  });
+
+  // Get friends list
+  app.get("/api/friends", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return friendsController.getFriends(request, reply);
+  });
+
+  // Remove a friend
+  app.delete("/api/friends/:publicId", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return friendsController.removeFriend(request, reply);
   });
 
   // ==================== VISION / OCR ENDPOINTS ====================

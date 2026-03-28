@@ -191,6 +191,18 @@ export class DatabaseService {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      -- ═══ Friends ═══
+      CREATE TABLE IF NOT EXISTS friendships (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        friend_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, friend_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_friendships_user_id ON friendships(user_id);
+      CREATE INDEX IF NOT EXISTS idx_friendships_friend_id ON friendships(friend_id);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
