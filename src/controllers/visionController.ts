@@ -76,7 +76,7 @@ function parseReceiptText(text: string): ParsedReceipt {
 
   // --- Totale ---
   let totalAmount: number | null = null;
-  const totalRegex = /(?:TOTALE|TOT\.?|TOTALE\s*EURO|TOTALE\s*€|IMPORTO\s*DOVUTO)[:\s€]*([0-9]+[.,][0-9]{2})/i;
+  const totalRegex = /(?:TOTALE\s*COMPLESSIVO|TOTALE\s*EURO|TOTALE\s*€|IMPORTO\s*DOVUTO|TOTALE|TOT\.?)[:\s€\n]*([0-9]+[.,][0-9]{2})/i;
   const totalMatch = text.match(totalRegex);
   if (totalMatch) {
     totalAmount = parseFloat(totalMatch[1].replace(",", "."));
