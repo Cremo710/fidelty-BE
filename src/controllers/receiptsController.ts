@@ -31,7 +31,7 @@ function computeEarnedPoints(amount: unknown, hasMatchedBar: boolean): number {
     return 0;
   }
 
-  return Math.max(1, Math.round(numericAmount));
+  return Math.max(1, Math.round(numericAmount * 100));
 }
 
 /**
