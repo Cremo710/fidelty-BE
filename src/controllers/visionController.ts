@@ -2,6 +2,7 @@ import type { FastifyRequest, FastifyReply } from "fastify";
 import { extractTextFromImage } from "../services/visionService.js";
 import { isImageFile } from "../utils/imageUpload.js";
 import { barRepository } from "../repositories/barRepository.js";
+import { databaseService } from "../services/databaseService.js";
 
 interface ParsedReceiptField {
   data: string | number | null;
@@ -208,6 +209,16 @@ class VisionController {
       }
 
       console.log(`✅ Scontrino parsed - P.IVA: ${parsed.merchantTaxId.data}, DOC: ${parsed.entities.receiptNumber.data}`);
+
+      // Controlla se il docId è già presente nel database
+      const existingReceipt = await databaseService.getReceipt(String(parsed.entities.receiptNumber.data));
+      if (existingReceipt) {
+        return reply.status(409).send({
+          success: false,
+          error: "Ricevuta già caricata nel sistema",
+          code: "DUPLICATE_RECEIPT",
+        });
+      }
 
       // Normalizza la P.IVA e cerca il bar associato
       const normalizedPiva = String(parsed.merchantTaxId.data).replace(/[^0-9A-Za-z]/g, "").toUpperCase();
