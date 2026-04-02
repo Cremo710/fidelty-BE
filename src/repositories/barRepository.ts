@@ -272,6 +272,10 @@ export class BarRepository {
         fields.push(`image = $${paramCount++}`);
         values.push(updates.image);
       }
+      if (updates.logo) {
+        fields.push(`logo = $${paramCount++}`);
+        values.push(updates.logo);
+      }
       if (updates.contact_email !== undefined) {
         fields.push(`contact_email = $${paramCount++}`);
         values.push(updates.contact_email);

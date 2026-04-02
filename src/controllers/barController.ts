@@ -484,6 +484,9 @@ export class BarController {
       let coverFileBuffer: Buffer | null = null;
       let coverFileMimeType: string | null = null;
       let coverFileName: string | null = null;
+      let logoFileBuffer: Buffer | null = null;
+      let logoFileMimeType: string | null = null;
+      let logoFileName: string | null = null;
 
       const contentType = request.headers["content-type"] || "";
       if (contentType.includes("multipart/form-data")) {
@@ -499,6 +502,14 @@ export class BarController {
             coverFileBuffer = Buffer.concat(chunks);
             coverFileMimeType = part.mimetype;
             coverFileName = part.filename;
+          } else if (part.type === "file" && part.fieldname === "logo") {
+            const chunks: Buffer[] = [];
+            for await (const chunk of part.file) {
+              chunks.push(chunk as Buffer);
+            }
+            logoFileBuffer = Buffer.concat(chunks);
+            logoFileMimeType = part.mimetype;
+            logoFileName = part.filename;
           }
         }
       } else {
@@ -540,6 +551,22 @@ export class BarController {
         } catch (err) {
           console.error("❌ Errore upload cover:", err);
           return reply.status(500).send({ success: false, error: "Errore nel caricamento della foto", code: "IMAGE_SAVE_ERROR" });
+        }
+      }
+
+      // Upload new logo if provided
+      if (logoFileBuffer && logoFileName) {
+        if (!logoFileMimeType || !isImageFile(logoFileMimeType)) {
+          return reply.status(400).send({ success: false, error: "Solo file PNG, JPEG o WebP accettati", code: "INVALID_FILE_TYPE" });
+        }
+        if (!isFileSizeValid(logoFileBuffer.length)) {
+          return reply.status(400).send({ success: false, error: "File troppo grande (massimo 5MB)", code: "FILE_TOO_LARGE" });
+        }
+        try {
+          updates.logo = await saveAndOptimizeImage(logoFileBuffer, logoFileName, "fidelty/logos");
+        } catch (err) {
+          console.error("❌ Errore upload logo:", err);
+          return reply.status(500).send({ success: false, error: "Errore nel caricamento del logo", code: "IMAGE_SAVE_ERROR" });
         }
       }
 
