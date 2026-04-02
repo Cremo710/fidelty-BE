@@ -203,6 +203,28 @@ export class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_friendships_user_id ON friendships(user_id);
       CREATE INDEX IF NOT EXISTS idx_friendships_friend_id ON friendships(friend_id);
+
+      -- ═══ Business Requests (richieste registrazione bar con approvazione) ═══
+      CREATE TABLE IF NOT EXISTS business_requests (
+        id VARCHAR(26) PRIMARY KEY,
+        user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        business_name VARCHAR(255) NOT NULL,
+        bar_name VARCHAR(255) NOT NULL,
+        address VARCHAR(500) NOT NULL,
+        vat_number VARCHAR(20) NOT NULL,
+        contact_email VARCHAR(255),
+        phone VARCHAR(50),
+        document_url TEXT,
+        document_public_id VARCHAR(255),
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        rejection_reason TEXT,
+        reviewed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_business_requests_user_id ON business_requests(user_id);
+      CREATE INDEX IF NOT EXISTS idx_business_requests_status ON business_requests(status);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {

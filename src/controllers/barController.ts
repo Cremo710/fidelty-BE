@@ -3,6 +3,7 @@ import { barRepository } from "../repositories/barRepository.js";
 import {
   validateBarRegistrationInput,
   validateCardConfigInput,
+  validateBarUpdateInput,
   type BarRegistrationInput,
 } from "../validators/barValidator.js";
 import { saveAndOptimizeImage, isImageFile, isFileSizeValid } from "../utils/imageUpload.js";
@@ -459,6 +460,129 @@ export class BarController {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
       return reply.status(500).send({ success: false, error: errorMessage, code: "RETRIEVAL_ERROR" });
+    }
+  }
+
+  /**
+   * Handler per aggiornare il profilo del bar (campi modificabili)
+   * Non permette la modifica di businessName (merchant_name) e piva (iva)
+   */
+  async updateProfile(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const bar = await barRepository.findByUserId(userId);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      // Parse multipart or JSON
+      const data: any = {};
+      let coverFileBuffer: Buffer | null = null;
+      let coverFileMimeType: string | null = null;
+      let coverFileName: string | null = null;
+
+      const contentType = request.headers["content-type"] || "";
+      if (contentType.includes("multipart/form-data")) {
+        const parts = request.parts();
+        for await (const part of parts) {
+          if (part.type === "field") {
+            data[part.fieldname] = (part.value as string).trim();
+          } else if (part.type === "file" && part.fieldname === "coverImage") {
+            const chunks: Buffer[] = [];
+            for await (const chunk of part.file) {
+              chunks.push(chunk as Buffer);
+            }
+            coverFileBuffer = Buffer.concat(chunks);
+            coverFileMimeType = part.mimetype;
+            coverFileName = part.filename;
+          }
+        }
+      } else {
+        Object.assign(data, request.body as object);
+      }
+
+      const validation = validateBarUpdateInput(data);
+      if (!validation.success) {
+        return reply.status(400).send({
+          success: false,
+          error: "Dati di input non validi",
+          code: "VALIDATION_ERROR",
+          details: validation.errors,
+        });
+      }
+
+      const input = validation.data!;
+      const updates: any = {};
+
+      if (input.barName) updates.name = input.barName;
+      if (input.address) updates.address = input.address;
+      if (input.contactEmail !== undefined) updates.contact_email = input.contactEmail;
+      if (input.phone !== undefined) updates.phone = input.phone;
+      if (input.instagram !== undefined) updates.instagram = input.instagram;
+      if (input.facebook !== undefined) updates.facebook = input.facebook;
+      if (input.tiktok !== undefined) updates.tiktok = input.tiktok;
+      if (input.website !== undefined) updates.website = input.website;
+
+      // Upload new cover image if provided
+      if (coverFileBuffer && coverFileName) {
+        if (!coverFileMimeType || !isImageFile(coverFileMimeType)) {
+          return reply.status(400).send({ success: false, error: "Solo file PNG, JPEG o WebP accettati", code: "INVALID_FILE_TYPE" });
+        }
+        if (!isFileSizeValid(coverFileBuffer.length)) {
+          return reply.status(400).send({ success: false, error: "File troppo grande (massimo 5MB)", code: "FILE_TOO_LARGE" });
+        }
+        try {
+          updates.image = await saveAndOptimizeImage(coverFileBuffer, coverFileName);
+        } catch (err) {
+          console.error("❌ Errore upload cover:", err);
+          return reply.status(500).send({ success: false, error: "Errore nel caricamento della foto", code: "IMAGE_SAVE_ERROR" });
+        }
+      }
+
+      // Re-geocode if address changed
+      if (input.address && input.address !== bar.address) {
+        const coords = await this.geocodeAddress(input.address);
+        if (coords) {
+          updates.latitude = coords.latitude;
+          updates.longitude = coords.longitude;
+        }
+      }
+
+      await barRepository.updateBar(bar.id, updates);
+
+      // Return updated bar data
+      const updatedBar = await barRepository.findByUserId(userId);
+      return reply.status(200).send({
+        success: true,
+        message: "Profilo bar aggiornato",
+        data: {
+          id: updatedBar!.id,
+          piva: updatedBar!.iva,
+          barName: updatedBar!.name,
+          businessName: updatedBar!.merchant_name,
+          address: updatedBar!.address,
+          coverImage: updatedBar!.image,
+          logo: updatedBar!.logo,
+          contactEmail: updatedBar!.contact_email,
+          phone: updatedBar!.phone,
+          instagram: updatedBar!.instagram,
+          facebook: updatedBar!.facebook,
+          tiktok: updatedBar!.tiktok,
+          website: updatedBar!.website,
+          cardBackgroundImage: updatedBar!.card_background_image,
+          cardColor: updatedBar!.card_color,
+          cardUseCover: updatedBar!.card_use_cover,
+          createdAt: updatedBar!.created_at,
+          updatedAt: updatedBar!.updated_at,
+        },
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "UPDATE_ERROR" });
     }
   }
 

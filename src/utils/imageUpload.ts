@@ -65,6 +65,59 @@ export async function saveAndOptimizeImage(
 }
 
 /**
+ * Carica un documento (immagine o PDF) su Cloudinary senza ottimizzazione sharp
+ */
+export async function uploadDocument(
+  bufferFile: Buffer,
+  filename: string,
+  mimeType: string,
+  folder: string = "fidelty/business_docs"
+): Promise<{ secure_url: string; public_id: string }> {
+  try {
+    const resourceType = mimeType === "application/pdf" ? "raw" as const : "image" as const;
+
+    const result = await new Promise<{ secure_url: string; public_id: string }>((resolve, reject) => {
+      const timestamp = Date.now();
+      const safeName = filename.replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder,
+          public_id: `${timestamp}-${safeName}`,
+          resource_type: resourceType,
+          overwrite: false,
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result as { secure_url: string; public_id: string });
+        }
+      );
+      uploadStream.end(bufferFile);
+    });
+
+    console.log(`✅ Documento caricato su Cloudinary: ${result.secure_url}`);
+    return result;
+  } catch (error) {
+    console.error("❌ Errore nel caricamento del documento su Cloudinary:", error);
+    throw new Error("Impossibile caricare il documento");
+  }
+}
+
+const ACCEPTED_DOC_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "application/pdf",
+]);
+
+/**
+ * Valida il tipo MIME per documenti (immagini + PDF)
+ */
+export function isDocumentFile(mimeType: string | undefined): boolean {
+  return !!mimeType && ACCEPTED_DOC_MIME_TYPES.has(mimeType);
+}
+
+/**
  * Valida il tipo MIME del file (accetta PNG, JPEG, WebP)
  */
 export function isImageFile(mimeType: string | undefined): boolean {

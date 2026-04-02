@@ -272,6 +272,38 @@ export class BarRepository {
         fields.push(`image = $${paramCount++}`);
         values.push(updates.image);
       }
+      if (updates.contact_email !== undefined) {
+        fields.push(`contact_email = $${paramCount++}`);
+        values.push(updates.contact_email);
+      }
+      if (updates.phone !== undefined) {
+        fields.push(`phone = $${paramCount++}`);
+        values.push(updates.phone);
+      }
+      if (updates.instagram !== undefined) {
+        fields.push(`instagram = $${paramCount++}`);
+        values.push(updates.instagram);
+      }
+      if (updates.facebook !== undefined) {
+        fields.push(`facebook = $${paramCount++}`);
+        values.push(updates.facebook);
+      }
+      if (updates.tiktok !== undefined) {
+        fields.push(`tiktok = $${paramCount++}`);
+        values.push(updates.tiktok);
+      }
+      if (updates.website !== undefined) {
+        fields.push(`website = $${paramCount++}`);
+        values.push(updates.website);
+      }
+      if (updates.latitude !== undefined) {
+        fields.push(`latitude = $${paramCount++}`);
+        values.push(updates.latitude);
+      }
+      if (updates.longitude !== undefined) {
+        fields.push(`longitude = $${paramCount++}`);
+        values.push(updates.longitude);
+      }
 
       if (fields.length === 0) {
         await client.query("COMMIT");

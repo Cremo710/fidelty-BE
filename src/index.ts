@@ -13,6 +13,7 @@ import { offerController } from "./controllers/offerController.js";
 import { openingHoursController } from "./controllers/openingHoursController.js";
 import { visionController } from "./controllers/visionController.js";
 import { friendsController } from "./controllers/friendsController.js";
+import { businessRequestController } from "./controllers/businessRequestController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 
@@ -154,6 +155,11 @@ async function createServer(): Promise<FastifyInstance> {
     return barController.getBarByUser(request, reply);
   });
 
+  // Update bar profile (protected route) - only editable fields
+  app.patch("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.updateProfile(request, reply);
+  });
+
   // Public endpoint: list bars with coordinates for map preview
   app.get("/api/bars", async (request, reply) => {
     return barController.listBars(request, reply);
@@ -252,6 +258,28 @@ async function createServer(): Promise<FastifyInstance> {
   // Remove a friend
   app.delete("/api/friends/:publicId", { onRequest: [authenticateToken] }, async (request, reply) => {
     return friendsController.removeFriend(request, reply);
+  });
+
+  // ==================== BUSINESS REQUESTS ENDPOINTS ====================
+
+  // Create a new business request (with optional document upload)
+  app.post("/api/business-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return businessRequestController.create(request, reply);
+  });
+
+  // Get the authenticated user's latest business request
+  app.get("/api/business-requests/my", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return businessRequestController.getMyRequest(request, reply);
+  });
+
+  // List all business requests (admin)
+  app.get("/api/business-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return businessRequestController.listAll(request, reply);
+  });
+
+  // Approve or reject a business request (admin)
+  app.patch("/api/business-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return businessRequestController.updateStatus(request, reply);
   });
 
   // ==================== VISION / OCR ENDPOINTS ====================
