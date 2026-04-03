@@ -9,6 +9,7 @@ export interface OfferDTO {
   description: string | null;
   conditions: string | null;
   points_required: number;
+  icon: string | null;
   valid_from: Date | null;
   valid_until: Date | null;
   is_active: boolean;
@@ -30,9 +31,9 @@ export class OfferRepository {
       const query = `
         INSERT INTO offers (
           id, bar_id, title, description, conditions,
-          points_required, valid_from, valid_until, is_active, updated_at
+          points_required, icon, valid_from, valid_until, is_active, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
         RETURNING id
       `;
 
@@ -43,6 +44,7 @@ export class OfferRepository {
         data.description ?? null,
         data.conditions ?? null,
         data.pointsRequired,
+        data.icon ?? null,
         data.validFrom ?? null,
         data.validUntil ?? null,
         data.isActive ?? true,
@@ -110,6 +112,7 @@ export class OfferRepository {
       if (data.description !== undefined) { fields.push(`description = $${paramCount++}`); values.push(data.description); }
       if (data.conditions !== undefined) { fields.push(`conditions = $${paramCount++}`); values.push(data.conditions); }
       if (data.pointsRequired !== undefined) { fields.push(`points_required = $${paramCount++}`); values.push(data.pointsRequired); }
+      if (data.icon !== undefined) { fields.push(`icon = $${paramCount++}`); values.push(data.icon); }
       if (data.validFrom !== undefined) { fields.push(`valid_from = $${paramCount++}`); values.push(data.validFrom); }
       if (data.validUntil !== undefined) { fields.push(`valid_until = $${paramCount++}`); values.push(data.validUntil); }
       if (data.isActive !== undefined) { fields.push(`is_active = $${paramCount++}`); values.push(data.isActive); }

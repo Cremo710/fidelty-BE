@@ -33,6 +33,11 @@ export const createOfferSchema = z.object({
     .datetime({ message: "Data di fine non valida" })
     .optional()
     .nullable(),
+  icon: z
+    .string()
+    .max(50, "Nome icona non può superare 50 caratteri")
+    .optional()
+    .nullable(),
   isActive: z
     .boolean()
     .optional()

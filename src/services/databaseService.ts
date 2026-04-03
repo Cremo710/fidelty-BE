@@ -147,6 +147,7 @@ export class DatabaseService {
       );
 
       CREATE INDEX IF NOT EXISTS idx_offers_bar_id ON offers(bar_id);
+      ALTER TABLE offers ADD COLUMN IF NOT EXISTS icon VARCHAR(50);
 
       -- Tabella orari di apertura
       CREATE TABLE IF NOT EXISTS opening_hours (
