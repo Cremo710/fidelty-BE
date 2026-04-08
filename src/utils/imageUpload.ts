@@ -27,6 +27,18 @@ export async function saveAndOptimizeImage(
   filename: string,
   folder: string = "fidelty/bars"
 ): Promise<string> {
+  const result = await uploadOptimizedImage(bufferFile, filename, folder);
+  return result.secure_url;
+}
+
+/**
+ * Ottimizza e carica un'immagine su Cloudinary ritornando anche il public_id
+ */
+export async function uploadOptimizedImage(
+  bufferFile: Buffer,
+  filename: string,
+  folder: string = "fidelty/bars"
+): Promise<{ secure_url: string; public_id: string }> {
   try {
     // Ottimizza con sharp prima di caricare
     const optimizedBuffer = await sharp(bufferFile)
@@ -38,7 +50,7 @@ export async function saveAndOptimizeImage(
       .toBuffer();
 
     // Upload su Cloudinary
-    const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
+    const result = await new Promise<{ secure_url: string; public_id: string }>((resolve, reject) => {
       const timestamp = Date.now();
       const safeName = filename.replace(/[^a-zA-Z0-9_.-]/g, "_");
       const uploadStream = cloudinary.uploader.upload_stream(
@@ -50,14 +62,14 @@ export async function saveAndOptimizeImage(
         },
         (error, result) => {
           if (error) reject(error);
-          else resolve(result as { secure_url: string });
+          else resolve(result as { secure_url: string; public_id: string });
         }
       );
       uploadStream.end(optimizedBuffer);
     });
 
     console.log(`✅ Immagine caricata su Cloudinary: ${result.secure_url}`);
-    return result.secure_url;
+    return result;
   } catch (error) {
     console.error("❌ Errore nel caricamento dell'immagine su Cloudinary:", error);
     throw new Error("Impossibile caricare l'immagine");

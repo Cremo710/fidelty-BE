@@ -614,6 +614,37 @@ export class BarController {
   }
 
   /**
+   * Handler per eliminare il bar dell'utente autenticato.
+   * L'eliminazione rimuove l'accesso alle funzionalita' esclusive per bar owner.
+   */
+  async deleteProfile(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const bar = await barRepository.findByUserId(userId);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      const deleted = await barRepository.deleteBar(bar.id);
+      if (!deleted) {
+        return reply.status(500).send({ success: false, error: "Impossibile eliminare il bar", code: "DELETE_ERROR" });
+      }
+
+      return reply.status(200).send({
+        success: true,
+        message: "Iscrizione bar eliminata con successo",
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "DELETE_ERROR" });
+    }
+  }
+
+  /**
    * Lista tutti i bar
    */
   async listBars(request: FastifyRequest, reply: FastifyReply) {

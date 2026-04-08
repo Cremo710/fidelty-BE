@@ -224,6 +224,23 @@ export class DatabaseService {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS cover_image_url TEXT;
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS cover_image_public_id VARCHAR(255);
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS logo_url TEXT;
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS logo_public_id VARCHAR(255);
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS instagram VARCHAR(255);
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS facebook VARCHAR(255);
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS tiktok VARCHAR(255);
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS website VARCHAR(500);
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS card_background_image_url TEXT;
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS card_background_image_public_id VARCHAR(255);
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS card_color VARCHAR(50);
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS card_use_cover BOOLEAN DEFAULT FALSE;
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS offers_json JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS opening_hours_json JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+      ALTER TABLE business_requests ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+
       CREATE INDEX IF NOT EXISTS idx_business_requests_user_id ON business_requests(user_id);
       CREATE INDEX IF NOT EXISTS idx_business_requests_status ON business_requests(status);
     `);

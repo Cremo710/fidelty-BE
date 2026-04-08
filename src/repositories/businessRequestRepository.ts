@@ -12,6 +12,22 @@ export interface BusinessRequestDTO {
   phone: string | null;
   document_url: string | null;
   document_public_id: string | null;
+  cover_image_url: string | null;
+  cover_image_public_id: string | null;
+  logo_url: string | null;
+  logo_public_id: string | null;
+  instagram: string | null;
+  facebook: string | null;
+  tiktok: string | null;
+  website: string | null;
+  card_background_image_url: string | null;
+  card_background_image_public_id: string | null;
+  card_color: string | null;
+  card_use_cover: boolean;
+  offers_json: unknown[];
+  opening_hours_json: unknown[];
+  latitude: number | null;
+  longitude: number | null;
   status: "pending" | "approved" | "rejected";
   rejection_reason: string | null;
   reviewed_at: Date | null;
@@ -30,15 +46,45 @@ export class BusinessRequestRepository {
     phone?: string | null;
     documentUrl?: string | null;
     documentPublicId?: string | null;
+    coverImageUrl?: string | null;
+    coverImagePublicId?: string | null;
+    logoUrl?: string | null;
+    logoPublicId?: string | null;
+    instagram?: string | null;
+    facebook?: string | null;
+    tiktok?: string | null;
+    website?: string | null;
+    cardBackgroundImageUrl?: string | null;
+    cardBackgroundImagePublicId?: string | null;
+    cardColor?: string | null;
+    cardUseCover?: boolean;
+    offers?: unknown[];
+    openingHours?: unknown[];
+    latitude?: number | null;
+    longitude?: number | null;
   }): Promise<BusinessRequestDTO> {
     const id = ulid();
     const query = `
       INSERT INTO business_requests (
         id, user_id, business_name, bar_name, address, vat_number,
         contact_email, phone, document_url, document_public_id,
+        cover_image_url, cover_image_public_id, logo_url, logo_public_id,
+        instagram, facebook, tiktok, website,
+        card_background_image_url, card_background_image_public_id,
+        card_color, card_use_cover, offers_json, opening_hours_json,
+        latitude, longitude,
         status, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', CURRENT_TIMESTAMP)
+      VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10,
+        $11, $12, $13, $14,
+        $15, $16, $17, $18,
+        $19, $20,
+        $21, $22, $23::jsonb, $24::jsonb,
+        $25, $26,
+        'pending', CURRENT_TIMESTAMP
+      )
       RETURNING *
     `;
     const values = [
@@ -52,6 +98,22 @@ export class BusinessRequestRepository {
       data.phone || null,
       data.documentUrl || null,
       data.documentPublicId || null,
+      data.coverImageUrl || null,
+      data.coverImagePublicId || null,
+      data.logoUrl || null,
+      data.logoPublicId || null,
+      data.instagram || null,
+      data.facebook || null,
+      data.tiktok || null,
+      data.website || null,
+      data.cardBackgroundImageUrl || null,
+      data.cardBackgroundImagePublicId || null,
+      data.cardColor || null,
+      data.cardUseCover || false,
+      JSON.stringify(data.offers || []),
+      JSON.stringify(data.openingHours || []),
+      data.latitude ?? null,
+      data.longitude ?? null,
     ];
     const result = await databaseService.getPool().query(query, values);
     return result.rows[0];

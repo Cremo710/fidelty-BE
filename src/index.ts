@@ -160,6 +160,11 @@ async function createServer(): Promise<FastifyInstance> {
     return barController.updateProfile(request, reply);
   });
 
+  // Delete bar profile/subscription (protected route)
+  app.delete("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.deleteProfile(request, reply);
+  });
+
   // Public endpoint: list bars with coordinates for map preview
   app.get("/api/bars", async (request, reply) => {
     return barController.listBars(request, reply);

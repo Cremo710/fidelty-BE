@@ -6,6 +6,13 @@ import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
 import { receiptsController } from "./controllers/receiptsController.js";
 import { barController } from "./controllers/barController.js";
+import { loyaltyCardRepository } from "./repositories/loyaltyCardRepository.js";
+import { userRepository } from "./repositories/userRepository.js";
+import { offerController } from "./controllers/offerController.js";
+import { openingHoursController } from "./controllers/openingHoursController.js";
+import { visionController } from "./controllers/visionController.js";
+import { friendsController } from "./controllers/friendsController.js";
+import { businessRequestController } from "./controllers/businessRequestController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 const { Client } = pg;
@@ -92,18 +99,78 @@ async function createServer() {
     app.get("/api/auth/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
         return authController.getProfile(request, reply);
     });
+    // Upload/update profile photo (protected route)
+    app.patch("/api/auth/profile-photo", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return authController.uploadProfilePhoto(request, reply);
+    });
+    // ==================== USER SEARCH ENDPOINTS ====================
+    // Search user by public_id (protected route)
+    app.get("/api/users/search", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return authController.searchByPublicId(request, reply);
+    });
     // ==================== BAR ENDPOINTS ====================
     // Bar registration endpoint (protected route)
     app.post("/api/bar/registration", { onRequest: [authenticateToken] }, async (request, reply) => {
         return barController.register(request, reply);
     });
+    // Complete bar registration - atomic, no partial data (protected route)
+    app.post("/api/bar/complete-registration", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barController.completeRegistration(request, reply);
+    });
     // Get bar profile (protected route)
     app.get("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
         return barController.getBarByUser(request, reply);
     });
+    // Update bar profile (protected route) - only editable fields
+    app.patch("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barController.updateProfile(request, reply);
+    });
+    // Delete bar profile/subscription (protected route)
+    app.delete("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barController.deleteProfile(request, reply);
+    });
     // Public endpoint: list bars with coordinates for map preview
     app.get("/api/bars", async (request, reply) => {
         return barController.listBars(request, reply);
+    });
+    // Public endpoint: get offers for a specific bar
+    app.get("/api/bars/:barId/offers", async (request, reply) => {
+        return offerController.listOffersByBarId(request, reply);
+    });
+    // Public endpoint: get opening hours for a specific bar
+    app.get("/api/bars/:barId/opening-hours", async (request, reply) => {
+        return openingHoursController.getOpeningHoursByBarId(request, reply);
+    });
+    // ==================== BAR CARD CONFIG ENDPOINTS ====================
+    // Update bar card configuration (Step 2 onboarding)
+    app.patch("/api/bar/card-config", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barController.updateCardConfig(request, reply);
+    });
+    // ==================== OFFERS ENDPOINTS ====================
+    // Create a new offer
+    app.post("/api/bar/offers", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return offerController.createOffer(request, reply);
+    });
+    // List offers for the authenticated bar owner
+    app.get("/api/bar/offers", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return offerController.listOffers(request, reply);
+    });
+    // Update an offer
+    app.put("/api/bar/offers/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return offerController.updateOffer(request, reply);
+    });
+    // Delete an offer
+    app.delete("/api/bar/offers/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return offerController.deleteOffer(request, reply);
+    });
+    // ==================== OPENING HOURS ENDPOINTS ====================
+    // Set opening hours (upsert)
+    app.post("/api/bar/opening-hours", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return openingHoursController.setOpeningHours(request, reply);
+    });
+    // Get opening hours
+    app.get("/api/bar/opening-hours", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return openingHoursController.getOpeningHours(request, reply);
     });
     // ==================== RECEIPT ENDPOINTS ====================
     // Receipt processing endpoint (OCR processing via Taggun)
@@ -111,8 +178,55 @@ async function createServer() {
         return receiptsController.processReceipt(request, reply);
     });
     // Receipt confirm endpoint (save to database)
-    app.post("/api/receipts/confirm", async (request, reply) => {
+    app.post("/api/receipts/confirm", { onRequest: [authenticateToken] }, async (request, reply) => {
         return receiptsController.confirmReceipt(request, reply);
+    });
+    // Loyalty cards endpoint for authenticated user
+    app.get("/api/receipts/my-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return receiptsController.getMyLoyaltyCards(request, reply);
+    });
+    // Delete a receipt and recalculate loyalty card (protected)
+    app.delete("/api/receipts/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return receiptsController.deleteReceipt(request, reply);
+    });
+    // Recalculate all loyalty cards from receipts (protected, admin utility)
+    app.post("/api/receipts/recalculate-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return receiptsController.recalculateCards(request, reply);
+    });
+    // ==================== FRIENDS ENDPOINTS ====================
+    // Add a friend by public_id
+    app.post("/api/friends/add", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.addFriend(request, reply);
+    });
+    // Get friends list
+    app.get("/api/friends", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.getFriends(request, reply);
+    });
+    // Remove a friend
+    app.delete("/api/friends/:publicId", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.removeFriend(request, reply);
+    });
+    // ==================== BUSINESS REQUESTS ENDPOINTS ====================
+    // Create a new business request (with optional document upload)
+    app.post("/api/business-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return businessRequestController.create(request, reply);
+    });
+    // Get the authenticated user's latest business request
+    app.get("/api/business-requests/my", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return businessRequestController.getMyRequest(request, reply);
+    });
+    // List all business requests (admin)
+    app.get("/api/business-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return businessRequestController.listAll(request, reply);
+    });
+    // Approve or reject a business request (admin)
+    app.patch("/api/business-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return businessRequestController.updateStatus(request, reply);
+    });
+    // ==================== VISION / OCR ENDPOINTS ====================
+    // Extract text from image via Google Cloud Vision
+    app.post("/api/vision/extract-text", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return visionController.extractText(request, reply);
     });
     // Graceful shutdown
     process.on("SIGTERM", async () => {
@@ -173,6 +287,20 @@ async function startServer() {
         // Initialize database
         await databaseService.initializeTables();
         console.log("✅ Database inizializzato");
+        // Backfill loyalty_cards dagli scontrini esistenti (idempotente, sicuro ad ogni avvio)
+        try {
+            await loyaltyCardRepository.backfillFromReceipts();
+        }
+        catch (err) {
+            console.warn("⚠️ Backfill loyalty_cards fallito (non bloccante):", err);
+        }
+        // Backfill public_id per utenti che non ne hanno uno (idempotente)
+        try {
+            await userRepository.backfillPublicIds();
+        }
+        catch (err) {
+            console.warn("⚠️ Backfill public_id fallito (non bloccante):", err);
+        }
         // Setup hooks
         setupHooks(app);
         // Start listening
