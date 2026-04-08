@@ -1,5 +1,6 @@
 import { databaseService } from "../services/databaseService.js";
 import { ulid } from "ulid";
+import type { PoolClient } from "pg";
 
 export interface BarDTO {
   id: string;
@@ -23,6 +24,42 @@ export interface BarDTO {
   longitude: number | null;
   created_at: Date;
   updated_at: Date;
+}
+
+export interface BarCompleteCreationData {
+  userId: string;
+  piva: string;
+  merchantName: string;
+  name: string;
+  address: string;
+  image?: string | null;
+  logo?: string | null;
+  contactEmail?: string | null;
+  phone?: string | null;
+  instagram?: string | null;
+  facebook?: string | null;
+  tiktok?: string | null;
+  website?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  cardColor?: string | null;
+  cardBackgroundImage?: string | null;
+  cardUseCover?: boolean;
+  offers?: Array<{
+    title: string;
+    description?: string | null;
+    conditions?: string | null;
+    pointsRequired: number;
+    icon?: string | null;
+    validFrom?: string | null;
+    validUntil?: string | null;
+    isActive?: boolean;
+  }>;
+  openingHours?: Array<{
+    dayOfWeek: number;
+    isClosed: boolean;
+    timeRanges: Array<{ open: string; close: string }>;
+  }> | null;
 }
 
 /**
@@ -413,46 +450,27 @@ export class BarRepository {
    * Crea un bar con tutti i dati correlati (card config, offerte, orari)
    * in un'unica transazione atomica. Se qualcosa fallisce, nessun dato viene salvato.
    */
-  async createBarComplete(data: {
-    userId: string;
-    piva: string;
-    merchantName: string;
-    name: string;
-    address: string;
-    image?: string | null;
-    logo?: string | null;
-    contactEmail?: string | null;
-    phone?: string | null;
-    instagram?: string | null;
-    facebook?: string | null;
-    tiktok?: string | null;
-    website?: string | null;
-    latitude?: number | null;
-    longitude?: number | null;
-    cardColor?: string | null;
-    cardBackgroundImage?: string | null;
-    cardUseCover?: boolean;
-    offers?: Array<{
-      title: string;
-      description?: string | null;
-      conditions?: string | null;
-      pointsRequired: number;
-      isActive?: boolean;
-    }>;
-    openingHours?: Array<{
-      dayOfWeek: number;
-      isClosed: boolean;
-      timeRanges: Array<{ open: string; close: string }>;
-    }> | null;
-  }): Promise<string> {
+  async createBarComplete(data: BarCompleteCreationData): Promise<string> {
     const client = await databaseService.getPool().connect();
 
     try {
       await client.query("BEGIN");
+      const barId = await this.createBarCompleteWithClient(client, data);
+      await client.query("COMMIT");
+      console.log(`✅ Bar creato completamente con ID: ${barId}`);
+      return barId;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("❌ Errore durante la creazione completa del bar:", error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 
-      // 1. Crea il bar
-      const barId = ulid();
-      const barQuery = `
+  async createBarCompleteWithClient(client: PoolClient, data: BarCompleteCreationData): Promise<string> {
+    const barId = ulid();
+    const barQuery = `
         INSERT INTO bars (
           id, user_id, iva, merchant_name, name, address,
           latitude, longitude, image, logo,
@@ -484,53 +502,48 @@ export class BarRepository {
         data.cardColor || null,
         data.cardUseCover ?? false,
       ];
-      await client.query(barQuery, barValues);
+    await client.query(barQuery, barValues);
 
-      // 2. Crea le offerte (se presenti)
-      if (data.offers && data.offers.length > 0) {
-        for (const offer of data.offers) {
-          const offerId = ulid();
-          await client.query(
-            `INSERT INTO offers (id, bar_id, title, description, conditions, points_required, is_active, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)`,
-            [
-              offerId,
-              barId,
-              offer.title,
-              offer.description ?? null,
-              offer.conditions ?? null,
-              offer.pointsRequired,
-              offer.isActive ?? true,
-            ]
-          );
-        }
+    if (data.offers && data.offers.length > 0) {
+      for (const offer of data.offers) {
+        const offerId = ulid();
+        await client.query(
+          `INSERT INTO offers (
+             id, bar_id, title, description, conditions,
+             points_required, icon, valid_from, valid_until, is_active, updated_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)`,
+          [
+            offerId,
+            barId,
+            offer.title,
+            offer.description ?? null,
+            offer.conditions ?? null,
+            offer.pointsRequired,
+            offer.icon ?? null,
+            offer.validFrom ?? null,
+            offer.validUntil ?? null,
+            offer.isActive ?? true,
+          ]
+        );
       }
-
-      // 3. Salva gli orari (se presenti)
-      if (data.openingHours && data.openingHours.length > 0) {
-        for (const day of data.openingHours) {
-          await client.query(
-            `INSERT INTO opening_hours (bar_id, day_of_week, is_closed, time_ranges, updated_at)
-             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-             ON CONFLICT (bar_id, day_of_week) DO UPDATE SET
-               is_closed = EXCLUDED.is_closed,
-               time_ranges = EXCLUDED.time_ranges,
-               updated_at = CURRENT_TIMESTAMP`,
-            [barId, day.dayOfWeek, day.isClosed, JSON.stringify(day.timeRanges)]
-          );
-        }
-      }
-
-      await client.query("COMMIT");
-      console.log(`✅ Bar creato completamente con ID: ${barId}`);
-      return barId;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("❌ Errore durante la creazione completa del bar:", error);
-      throw error;
-    } finally {
-      client.release();
     }
+
+    if (data.openingHours && data.openingHours.length > 0) {
+      for (const day of data.openingHours) {
+        await client.query(
+          `INSERT INTO opening_hours (bar_id, day_of_week, is_closed, time_ranges, updated_at)
+           VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+           ON CONFLICT (bar_id, day_of_week) DO UPDATE SET
+             is_closed = EXCLUDED.is_closed,
+             time_ranges = EXCLUDED.time_ranges,
+             updated_at = CURRENT_TIMESTAMP`,
+          [barId, day.dayOfWeek, day.isClosed, JSON.stringify(day.timeRanges)]
+        );
+      }
+    }
+
+    return barId;
   }
 }
 

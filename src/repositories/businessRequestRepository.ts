@@ -1,5 +1,6 @@
 import { databaseService } from "../services/databaseService.js";
 import { ulid } from "ulid";
+import type { PoolClient } from "pg";
 
 export interface BusinessRequestDTO {
   id: string;
@@ -28,7 +29,7 @@ export interface BusinessRequestDTO {
   opening_hours_json: unknown[];
   latitude: number | null;
   longitude: number | null;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "CONFIRMED" | "REFUSED";
   rejection_reason: string | null;
   reviewed_at: Date | null;
   created_at: Date;
@@ -155,8 +156,9 @@ export class BusinessRequestRepository {
 
   async updateStatus(
     id: string,
-    status: "approved" | "rejected",
-    rejectionReason?: string
+    status: "CONFIRMED" | "REFUSED",
+    rejectionReason?: string,
+    client?: PoolClient
   ): Promise<BusinessRequestDTO | null> {
     const query = `
       UPDATE business_requests
@@ -168,7 +170,8 @@ export class BusinessRequestRepository {
       RETURNING *
     `;
     const values = [status, rejectionReason || null, id];
-    const result = await databaseService.getPool().query(query, values);
+    const executor = client ?? databaseService.getPool();
+    const result = await executor.query(query, values);
     return result.rows[0] || null;
   }
 

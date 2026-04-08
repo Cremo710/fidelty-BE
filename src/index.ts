@@ -282,7 +282,12 @@ async function createServer(): Promise<FastifyInstance> {
     return businessRequestController.listAll(request, reply);
   });
 
-  // Approve or reject a business request (admin)
+  // Approve or reject a business request (admin, explicit decision endpoint)
+  app.patch("/api/business-requests/:id/decision", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return businessRequestController.updateStatus(request, reply);
+  });
+
+  // Approve or reject a business request (admin, backward-compatible generic endpoint)
   app.patch("/api/business-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
     return businessRequestController.updateStatus(request, reply);
   });

@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from "fastify";
 import { businessRequestRepository } from "../repositories/businessRequestRepository.js";
 import { barRepository } from "../repositories/barRepository.js";
 import { uploadDocument, uploadOptimizedImage, isDocumentFile, isFileSizeValid, isImageFile } from "../utils/imageUpload.js";
+import { databaseService } from "../services/databaseService.js";
 
 interface GoogleGeocodeResponse {
   status: string;
@@ -381,18 +382,24 @@ export class BusinessRequestController {
 
       const { id } = request.params as { id: string };
       const { status, rejectionReason } = request.body as {
-        status: "approved" | "rejected";
+        status: "approved" | "rejected" | "CONFIRMED" | "REFUSED";
         rejectionReason?: string;
       };
 
-      if (!status || !["approved", "rejected"].includes(status)) {
+      if (!status || !["approved", "rejected", "CONFIRMED", "REFUSED"].includes(status)) {
         return reply.status(400).send({
           success: false,
-          error: "Stato non valido. Usa 'approved' o 'rejected'.",
+          error: "Stato non valido. Usa 'approved'/'CONFIRMED' o 'rejected'/'REFUSED'.",
         });
       }
 
-      if (status === "rejected" && !rejectionReason) {
+      const normalizedStatus = status === "approved"
+        ? "CONFIRMED"
+        : status === "rejected"
+          ? "REFUSED"
+          : status;
+
+      if (normalizedStatus === "REFUSED" && !rejectionReason) {
         return reply.status(400).send({
           success: false,
           error: "Il motivo del rifiuto è obbligatorio",
@@ -414,7 +421,108 @@ export class BusinessRequestController {
         });
       }
 
-      const updated = await businessRequestRepository.updateStatus(id, status, rejectionReason);
+      if (normalizedStatus === "CONFIRMED") {
+        const existingBar = await barRepository.findByUserId(existing.user_id);
+        if (existingBar) {
+          return reply.status(400).send({
+            success: false,
+            error: "L'utente ha già un bar registrato",
+          });
+        }
+
+        const pivaExists = await barRepository.findByPiva(existing.vat_number);
+        if (pivaExists) {
+          return reply.status(400).send({
+            success: false,
+            error: "Esiste già un bar con questa Partita IVA",
+          });
+        }
+
+        const client = await databaseService.getPool().connect();
+
+        try {
+          await client.query("BEGIN");
+
+          let offers: Array<{
+            title: string;
+            description?: string | null;
+            conditions?: string | null;
+            pointsRequired: number;
+            icon?: string | null;
+            validFrom?: string | null;
+            validUntil?: string | null;
+            isActive?: boolean;
+          }> = [];
+
+          if (Array.isArray(existing.offers_json)) {
+            offers = existing.offers_json as Array<{
+              title: string;
+              description?: string | null;
+              conditions?: string | null;
+              pointsRequired: number;
+              icon?: string | null;
+              validFrom?: string | null;
+              validUntil?: string | null;
+              isActive?: boolean;
+            }>;
+          }
+
+          let openingHours: Array<{
+            dayOfWeek: number;
+            isClosed: boolean;
+            timeRanges: Array<{ open: string; close: string }>;
+          }> | null = null;
+
+          if (Array.isArray(existing.opening_hours_json)) {
+            openingHours = existing.opening_hours_json as Array<{
+              dayOfWeek: number;
+              isClosed: boolean;
+              timeRanges: Array<{ open: string; close: string }>;
+            }>;
+          }
+
+          await barRepository.createBarCompleteWithClient(client, {
+            userId: existing.user_id,
+            piva: existing.vat_number,
+            merchantName: existing.business_name,
+            name: existing.bar_name,
+            address: existing.address,
+            image: existing.cover_image_url,
+            logo: existing.logo_url,
+            contactEmail: existing.contact_email,
+            phone: existing.phone,
+            instagram: existing.instagram,
+            facebook: existing.facebook,
+            tiktok: existing.tiktok,
+            website: existing.website,
+            latitude: existing.latitude,
+            longitude: existing.longitude,
+            cardColor: existing.card_color,
+            cardBackgroundImage: existing.card_use_cover
+              ? (existing.cover_image_url || existing.card_background_image_url)
+              : existing.card_background_image_url,
+            cardUseCover: existing.card_use_cover,
+            offers,
+            openingHours,
+          });
+
+          const updated = await businessRequestRepository.updateStatus(id, "CONFIRMED", undefined, client);
+
+          await client.query("COMMIT");
+
+          return reply.send({
+            success: true,
+            data: updated,
+          });
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        } finally {
+          client.release();
+        }
+      }
+
+      const updated = await businessRequestRepository.updateStatus(id, "REFUSED", rejectionReason);
 
       return reply.send({
         success: true,
