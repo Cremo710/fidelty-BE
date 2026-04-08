@@ -1,8 +1,10 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { businessRequestRepository } from "../repositories/businessRequestRepository.js";
 import { barRepository } from "../repositories/barRepository.js";
+import { userRepository } from "../repositories/userRepository.js";
 import { uploadDocument, uploadOptimizedImage, isDocumentFile, isFileSizeValid, isImageFile } from "../utils/imageUpload.js";
 import { databaseService } from "../services/databaseService.js";
+import { emailService } from "../services/emailService.js";
 
 interface GoogleGeocodeResponse {
   status: string;
@@ -370,8 +372,8 @@ export class BusinessRequestController {
   }
 
   /**
-   * PATCH /api/business-requests/:id
-   * Approva o rifiuta una richiesta (admin)
+  * PATCH /api/business-requests/:id
+  * Approva o rifiuta una richiesta (admin) e invia una mail con l'esito all'utente
    */
   async updateStatus(request: FastifyRequest, reply: FastifyReply) {
     try {
@@ -420,6 +422,10 @@ export class BusinessRequestController {
           error: "Questa richiesta è già stata elaborata",
         });
       }
+
+      const user = await userRepository.findById(existing.user_id);
+      const recipientEmail = existing.contact_email || user?.email || null;
+      const recipientName = user?.name || null;
 
       if (normalizedStatus === "CONFIRMED") {
         const existingBar = await barRepository.findByUserId(existing.user_id);
@@ -510,9 +516,30 @@ export class BusinessRequestController {
 
           await client.query("COMMIT");
 
+          let emailResult = null;
+          if (recipientEmail) {
+            try {
+              emailResult = await emailService.sendBusinessRequestDecisionEmail({
+                recipientEmail,
+                recipientName,
+                barName: existing.bar_name,
+                businessName: existing.business_name,
+                status: "CONFIRMED",
+              });
+            } catch (emailError) {
+              console.error("❌ Errore invio email approvazione business request:", emailError);
+              emailResult = {
+                sent: false,
+                skippedReason: "send_failed",
+                recipient: recipientEmail,
+              };
+            }
+          }
+
           return reply.send({
             success: true,
             data: updated,
+            email: emailResult,
           });
         } catch (error) {
           await client.query("ROLLBACK");
@@ -524,9 +551,31 @@ export class BusinessRequestController {
 
       const updated = await businessRequestRepository.updateStatus(id, "REFUSED", rejectionReason);
 
+      let emailResult = null;
+      if (recipientEmail) {
+        try {
+          emailResult = await emailService.sendBusinessRequestDecisionEmail({
+            recipientEmail,
+            recipientName,
+            barName: existing.bar_name,
+            businessName: existing.business_name,
+            status: "REFUSED",
+            rejectionReason,
+          });
+        } catch (emailError) {
+          console.error("❌ Errore invio email rifiuto business request:", emailError);
+          emailResult = {
+            sent: false,
+            skippedReason: "send_failed",
+            recipient: recipientEmail,
+          };
+        }
+      }
+
       return reply.send({
         success: true,
         data: updated,
+        email: emailResult,
       });
     } catch (error: any) {
       console.error("❌ Errore aggiornamento status business request:", error);
