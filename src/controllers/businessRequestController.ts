@@ -424,7 +424,7 @@ export class BusinessRequestController {
       }
 
       const user = await userRepository.findById(existing.user_id);
-      const recipientEmail = existing.contact_email || user?.email || null;
+      const recipientEmail = user?.email || null;
       const recipientName = user?.name || null;
 
       if (normalizedStatus === "CONFIRMED") {
