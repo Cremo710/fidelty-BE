@@ -463,6 +463,30 @@ export class BarController {
     }
   }
 
+  async getDashboardStats(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const bar = await barRepository.findByUserId(userId);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      const dashboardStats = await barRepository.getDashboardStats(bar.id);
+
+      return reply.status(200).send({
+        success: true,
+        data: dashboardStats,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "DASHBOARD_STATS_ERROR" });
+    }
+  }
+
   /**
    * Handler per aggiornare il profilo del bar (campi modificabili)
    * Non permette la modifica di businessName (merchant_name) e piva (iva)

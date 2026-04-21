@@ -155,6 +155,10 @@ async function createServer(): Promise<FastifyInstance> {
     return barController.getBarByUser(request, reply);
   });
 
+  app.get("/api/bar/dashboard-stats", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.getDashboardStats(request, reply);
+  });
+
   // Update bar profile (protected route) - only editable fields
   app.patch("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
     return barController.updateProfile(request, reply);

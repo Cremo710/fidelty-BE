@@ -62,6 +62,28 @@ export interface BarCompleteCreationData {
   }> | null;
 }
 
+export interface BarActivityItem {
+  id: string;
+  type: "receipt_upload";
+  userId: string | null;
+  userName: string | null;
+  userEmail: string | null;
+  totalAmount: number | null;
+  pointsEarned: number;
+  status: string | null;
+  createdAt: Date;
+}
+
+export interface BarDashboardStats {
+  totals: {
+    customersWithReceipts: number;
+    totalReceipts: number;
+    totalPointsIssued: number;
+    avgReceiptsPerCustomer: number;
+  };
+  activities: BarActivityItem[];
+}
+
 /**
  * Repository pattern per l'accesso ai dati dei bar
  * Astrae la logica di interazione con il database
@@ -417,6 +439,76 @@ export class BarRepository {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  async getDashboardStats(barId: string): Promise<BarDashboardStats> {
+    try {
+      const [summaryResult, activitiesResult] = await Promise.all([
+        databaseService.getPool().query(
+          `
+            SELECT
+              COUNT(DISTINCT r.user_id) FILTER (WHERE r.user_id IS NOT NULL) AS customers_with_receipts,
+              COUNT(r.id) AS total_receipts,
+              COALESCE(SUM(r.points_earned), 0) AS total_points_issued,
+              COALESCE(
+                ROUND(
+                  COUNT(r.id)::numeric / NULLIF(COUNT(DISTINCT r.user_id) FILTER (WHERE r.user_id IS NOT NULL), 0),
+                  1
+                ),
+                0
+              ) AS avg_receipts_per_customer
+            FROM receipts r
+            WHERE r.bar_id = $1
+          `,
+          [barId]
+        ),
+        databaseService.getPool().query(
+          `
+            SELECT
+              r.id,
+              r.user_id,
+              u.name AS user_name,
+              u.email AS user_email,
+              r.total_amount,
+              r.points_earned,
+              r.status,
+              r.created_at
+            FROM receipts r
+            LEFT JOIN utenti u ON u.id = r.user_id
+            WHERE r.bar_id = $1
+              AND r.user_id IS NOT NULL
+            ORDER BY r.created_at DESC
+            LIMIT 50
+          `,
+          [barId]
+        ),
+      ]);
+
+      const summary = summaryResult.rows[0] || {};
+
+      return {
+        totals: {
+          customersWithReceipts: Number(summary.customers_with_receipts) || 0,
+          totalReceipts: Number(summary.total_receipts) || 0,
+          totalPointsIssued: Number(summary.total_points_issued) || 0,
+          avgReceiptsPerCustomer: Number(summary.avg_receipts_per_customer) || 0,
+        },
+        activities: activitiesResult.rows.map((row: any) => ({
+          id: row.id,
+          type: "receipt_upload",
+          userId: row.user_id,
+          userName: row.user_name,
+          userEmail: row.user_email,
+          totalAmount: row.total_amount !== null ? Number(row.total_amount) : null,
+          pointsEarned: Number(row.points_earned) || 0,
+          status: row.status || null,
+          createdAt: row.created_at,
+        })),
+      };
+    } catch (error) {
+      console.error("❌ Errore nel recupero statistiche dashboard bar:", error);
+      throw error;
     }
   }
 
