@@ -243,6 +243,29 @@ export class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_business_requests_user_id ON business_requests(user_id);
       CREATE INDEX IF NOT EXISTS idx_business_requests_status ON business_requests(status);
+
+      -- ═══ Consumption Requests (richieste consumazione via QR) ═══
+      CREATE TABLE IF NOT EXISTS consumption_requests (
+        id VARCHAR(26) PRIMARY KEY,
+        requester_user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        bar_id VARCHAR(26) NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
+        amount DECIMAL(12, 2) NOT NULL,
+        points_preview INTEGER NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        qr_code_value VARCHAR(255) NOT NULL,
+        requester_name_snapshot VARCHAR(255),
+        requester_email_snapshot VARCHAR(255),
+        approved_at TIMESTAMP,
+        rejected_at TIMESTAMP,
+        processed_by_user_id VARCHAR(26) REFERENCES utenti(id) ON DELETE SET NULL,
+        rejection_reason TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_consumption_requests_requester ON consumption_requests(requester_user_id);
+      CREATE INDEX IF NOT EXISTS idx_consumption_requests_bar_id ON consumption_requests(bar_id);
+      CREATE INDEX IF NOT EXISTS idx_consumption_requests_status ON consumption_requests(status);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {

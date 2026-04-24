@@ -13,6 +13,7 @@ import { openingHoursController } from "./controllers/openingHoursController.js"
 import { visionController } from "./controllers/visionController.js";
 import { friendsController } from "./controllers/friendsController.js";
 import { businessRequestController } from "./controllers/businessRequestController.js";
+import { consumptionRequestController } from "./controllers/consumptionRequestController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 const { Client } = pg;
@@ -121,6 +122,9 @@ async function createServer() {
     app.get("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
         return barController.getBarByUser(request, reply);
     });
+    app.get("/api/bar/dashboard-stats", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barController.getDashboardStats(request, reply);
+    });
     // Update bar profile (protected route) - only editable fields
     app.patch("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
         return barController.updateProfile(request, reply);
@@ -140,6 +144,10 @@ async function createServer() {
     // Public endpoint: get opening hours for a specific bar
     app.get("/api/bars/:barId/opening-hours", async (request, reply) => {
         return openingHoursController.getOpeningHoursByBarId(request, reply);
+    });
+    // Public endpoint: resolve a bar from a QR code payload
+    app.get("/api/bars/resolve-qr", async (request, reply) => {
+        return consumptionRequestController.resolveBarFromQr(request, reply);
     });
     // ==================== BAR CARD CONFIG ENDPOINTS ====================
     // Update bar card configuration (Step 2 onboarding)
@@ -226,6 +234,10 @@ async function createServer() {
     // Approve or reject a business request (admin, backward-compatible generic endpoint)
     app.patch("/api/business-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
         return businessRequestController.updateStatus(request, reply);
+    });
+    // ==================== CONSUMPTION REQUESTS ENDPOINTS ====================
+    app.post("/api/consumption-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return consumptionRequestController.create(request, reply);
     });
     // ==================== VISION / OCR ENDPOINTS ====================
     // Extract text from image via Google Cloud Vision

@@ -14,6 +14,7 @@ import { openingHoursController } from "./controllers/openingHoursController.js"
 import { visionController } from "./controllers/visionController.js";
 import { friendsController } from "./controllers/friendsController.js";
 import { businessRequestController } from "./controllers/businessRequestController.js";
+import { consumptionRequestController } from "./controllers/consumptionRequestController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 
@@ -184,6 +185,11 @@ async function createServer(): Promise<FastifyInstance> {
     return openingHoursController.getOpeningHoursByBarId(request, reply);
   });
 
+  // Public endpoint: resolve a bar from a QR code payload
+  app.get("/api/bars/resolve-qr", async (request, reply) => {
+    return consumptionRequestController.resolveBarFromQr(request, reply);
+  });
+
   // ==================== BAR CARD CONFIG ENDPOINTS ====================
 
   // Update bar card configuration (Step 2 onboarding)
@@ -294,6 +300,12 @@ async function createServer(): Promise<FastifyInstance> {
   // Approve or reject a business request (admin, backward-compatible generic endpoint)
   app.patch("/api/business-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
     return businessRequestController.updateStatus(request, reply);
+  });
+
+  // ==================== CONSUMPTION REQUESTS ENDPOINTS ====================
+
+  app.post("/api/consumption-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return consumptionRequestController.create(request, reply);
   });
 
   // ==================== VISION / OCR ENDPOINTS ====================
