@@ -1,5 +1,6 @@
 import { ulid } from "ulid";
 import { databaseService } from "../services/databaseService.js";
+import { loyaltyCardRepository } from "./loyaltyCardRepository.js";
 
 export interface ConsumptionRequestDTO {
   id: string;
@@ -71,6 +72,165 @@ export class ConsumptionRequestRepository {
 
     const result = await databaseService.getPool().query(query, [barId]);
     return result.rows;
+  }
+
+  async approvePendingRequest(input: {
+    requestId: string;
+    barId: string;
+    processedByUserId: string;
+    barName: string;
+    barAddress: string | null;
+    barPiva: string;
+  }): Promise<ConsumptionRequestDTO> {
+    const client = await databaseService.getPool().connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const existingResult = await client.query<ConsumptionRequestDTO>(
+        `
+          SELECT *
+          FROM consumption_requests
+          WHERE id = $1 AND bar_id = $2
+          FOR UPDATE
+        `,
+        [input.requestId, input.barId],
+      );
+
+      const existing = existingResult.rows[0];
+      if (!existing) {
+        throw new Error("CONSUMPTION_REQUEST_NOT_FOUND");
+      }
+
+      if (existing.status !== "pending") {
+        throw new Error("CONSUMPTION_REQUEST_ALREADY_PROCESSED");
+      }
+
+      const pointsEarned = Number(existing.points_preview) || Math.round(Number(existing.amount) * 100);
+      const totalAmount = Number.parseFloat(existing.amount);
+
+      await client.query(
+        `
+          INSERT INTO receipts (
+            id,
+            doc_id,
+            user_id,
+            bar_id,
+            points_earned,
+            merchant_name,
+            merchant_address,
+            merchant_tax_id,
+            total_amount,
+            purchase_date,
+            line_items,
+            image_hash,
+            trust_score,
+            status,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, $10, NULL, NULL, 'approved', CURRENT_TIMESTAMP)
+        `,
+        [
+          ulid(),
+          `consumption-request:${existing.id}`,
+          existing.requester_user_id,
+          existing.bar_id,
+          pointsEarned,
+          input.barName,
+          input.barAddress,
+          input.barPiva,
+          Number.isFinite(totalAmount) ? totalAmount : 0,
+          JSON.stringify([]),
+        ],
+      );
+
+      await loyaltyCardRepository.upsertCardInTransaction(
+        client,
+        existing.requester_user_id,
+        existing.bar_id,
+        pointsEarned,
+      );
+
+      const updatedResult = await client.query<ConsumptionRequestDTO>(
+        `
+          UPDATE consumption_requests
+          SET
+            status = 'approved',
+            approved_at = CURRENT_TIMESTAMP,
+            rejected_at = NULL,
+            processed_by_user_id = $2,
+            rejection_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1
+          RETURNING *
+        `,
+        [input.requestId, input.processedByUserId],
+      );
+
+      await client.query("COMMIT");
+      return updatedResult.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async rejectPendingRequest(input: {
+    requestId: string;
+    barId: string;
+    processedByUserId: string;
+    rejectionReason?: string | null;
+  }): Promise<ConsumptionRequestDTO> {
+    const client = await databaseService.getPool().connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const existingResult = await client.query<ConsumptionRequestDTO>(
+        `
+          SELECT *
+          FROM consumption_requests
+          WHERE id = $1 AND bar_id = $2
+          FOR UPDATE
+        `,
+        [input.requestId, input.barId],
+      );
+
+      const existing = existingResult.rows[0];
+      if (!existing) {
+        throw new Error("CONSUMPTION_REQUEST_NOT_FOUND");
+      }
+
+      if (existing.status !== "pending") {
+        throw new Error("CONSUMPTION_REQUEST_ALREADY_PROCESSED");
+      }
+
+      const updatedResult = await client.query<ConsumptionRequestDTO>(
+        `
+          UPDATE consumption_requests
+          SET
+            status = 'rejected',
+            approved_at = NULL,
+            rejected_at = CURRENT_TIMESTAMP,
+            processed_by_user_id = $2,
+            rejection_reason = $3,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $1
+          RETURNING *
+        `,
+        [input.requestId, input.processedByUserId, input.rejectionReason || null],
+      );
+
+      await client.query("COMMIT");
+      return updatedResult.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
 

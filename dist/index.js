@@ -239,6 +239,12 @@ async function createServer() {
     app.post("/api/consumption-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
         return consumptionRequestController.create(request, reply);
     });
+    app.get("/api/consumption-requests/bar/pending", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return consumptionRequestController.listPendingForBar(request, reply);
+    });
+    app.patch("/api/consumption-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return consumptionRequestController.updateStatus(request, reply);
+    });
     // ==================== VISION / OCR ENDPOINTS ====================
     // Extract text from image via Google Cloud Vision
     app.post("/api/vision/extract-text", { onRequest: [authenticateToken] }, async (request, reply) => {

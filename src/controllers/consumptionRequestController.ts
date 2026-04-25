@@ -25,6 +25,26 @@ const parseBarQrValue = (rawValue: string): string | null => {
 };
 
 export class ConsumptionRequestController {
+  private mapRequestResponse(row: Awaited<ReturnType<typeof consumptionRequestRepository.createRequest>>) {
+    return {
+      id: row.id,
+      status: row.status,
+      amount: Number.parseFloat(row.amount),
+      pointsPreview: row.points_preview,
+      qrCodeValue: row.qr_code_value,
+      requester: {
+        id: row.requester_user_id,
+        name: row.requester_name_snapshot,
+        email: row.requester_email_snapshot,
+      },
+      rejectionReason: row.rejection_reason,
+      approvedAt: row.approved_at,
+      rejectedAt: row.rejected_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
   async resolveBarFromQr(request: FastifyRequest, reply: FastifyReply) {
     try {
       const { code } = (request.query as { code?: string }) || {};
@@ -152,6 +172,93 @@ export class ConsumptionRequestController {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
       return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_ERROR" });
+    }
+  }
+
+  async listPendingForBar(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const bar = await barRepository.findByUserId(userId);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      const requests = await consumptionRequestRepository.listPendingByBarId(bar.id);
+
+      return reply.status(200).send({
+        success: true,
+        data: requests.map((row) => this.mapRequestResponse(row)),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_LIST_ERROR" });
+    }
+  }
+
+  async updateStatus(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const { id } = (request.params as { id: string }) || {};
+      const body = (request.body as { status?: string; rejectionReason?: string } | undefined) || {};
+      const normalizedStatus = String(body.status || "").toLowerCase();
+
+      if (!id) {
+        return reply.status(400).send({ success: false, error: "ID richiesta mancante", code: "MISSING_REQUEST_ID" });
+      }
+
+      if (!["approved", "rejected"].includes(normalizedStatus)) {
+        return reply.status(400).send({
+          success: false,
+          error: "Stato non valido. Usa 'approved' o 'rejected'.",
+          code: "INVALID_STATUS",
+        });
+      }
+
+      const bar = await barRepository.findByUserId(userId);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      const updated = normalizedStatus === "approved"
+        ? await consumptionRequestRepository.approvePendingRequest({
+            requestId: id,
+            barId: bar.id,
+            processedByUserId: userId,
+            barName: bar.name,
+            barAddress: bar.address,
+            barPiva: bar.iva,
+          })
+        : await consumptionRequestRepository.rejectPendingRequest({
+            requestId: id,
+            barId: bar.id,
+            processedByUserId: userId,
+            rejectionReason: body.rejectionReason,
+          });
+
+      return reply.status(200).send({
+        success: true,
+        data: this.mapRequestResponse(updated),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+
+      if (errorMessage === "CONSUMPTION_REQUEST_NOT_FOUND") {
+        return reply.status(404).send({ success: false, error: "Richiesta non trovata", code: errorMessage });
+      }
+
+      if (errorMessage === "CONSUMPTION_REQUEST_ALREADY_PROCESSED") {
+        return reply.status(409).send({ success: false, error: "Richiesta già elaborata", code: errorMessage });
+      }
+
+      return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_UPDATE_ERROR" });
     }
   }
 }
