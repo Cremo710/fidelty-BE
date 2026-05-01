@@ -23,6 +23,8 @@ export interface LoyaltyCardWithBar {
   latitude: number | null;
   longitude: number | null;
   totalPoints: number;
+  frozenPoints: number;
+  availablePoints: number;
   receiptsCount: number;
   lastReceiptAt: Date | null;
   createdAt: Date;
@@ -113,11 +115,19 @@ export class LoyaltyCardRepository {
           b.address,
           ${geoSelect},
           lc.points AS total_points,
+          COALESCE(frozen.frozen_points, 0)::int AS frozen_points,
+          GREATEST(lc.points - COALESCE(frozen.frozen_points, 0)::int, 0) AS available_points,
           lc.receipts_count,
           lc.last_receipt_at,
           lc.created_at
         FROM loyalty_cards lc
         INNER JOIN bars b ON b.id = lc.bar_id
+        LEFT JOIN (
+          SELECT user_id, bar_id, SUM(points_amount)::int AS frozen_points
+          FROM offer_redemptions
+          WHERE status = 'frozen' AND expires_at > CURRENT_TIMESTAMP
+          GROUP BY user_id, bar_id
+        ) frozen ON frozen.user_id = lc.user_id AND frozen.bar_id = lc.bar_id
         WHERE lc.user_id = $1
         ORDER BY lc.updated_at DESC
       `;
@@ -135,6 +145,8 @@ export class LoyaltyCardRepository {
         latitude: row.latitude,
         longitude: row.longitude,
         totalPoints: Number(row.total_points) || 0,
+        frozenPoints: Number(row.frozen_points) || 0,
+        availablePoints: Number(row.available_points) || 0,
         receiptsCount: Number(row.receipts_count) || 0,
         lastReceiptAt: row.last_receipt_at,
         createdAt: row.created_at,

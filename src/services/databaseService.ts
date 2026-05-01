@@ -211,6 +211,43 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_consumption_requests_requester ON consumption_requests(requester_user_id);
       CREATE INDEX IF NOT EXISTS idx_consumption_requests_bar_id ON consumption_requests(bar_id);
       CREATE INDEX IF NOT EXISTS idx_consumption_requests_status ON consumption_requests(status);
+
+      -- ═══ Offer Redemptions (freeze + validate via QR) ═══
+      CREATE TABLE IF NOT EXISTS offer_redemptions (
+        id VARCHAR(26) PRIMARY KEY,
+        user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        bar_id VARCHAR(26) NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
+        offer_id VARCHAR(26) NOT NULL REFERENCES offers(id) ON DELETE CASCADE,
+        status VARCHAR(20) NOT NULL DEFAULT 'frozen',
+        points_amount INTEGER NOT NULL,
+        qr_nonce VARCHAR(64) NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        frozen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        redeemed_at TIMESTAMP,
+        cancelled_at TIMESTAMP,
+        validated_by_user_id VARCHAR(26) REFERENCES utenti(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CHECK (status IN ('frozen', 'redeemed', 'expired', 'cancelled'))
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_offer_redemptions_qr_nonce ON offer_redemptions(qr_nonce);
+      CREATE INDEX IF NOT EXISTS idx_offer_redemptions_user_bar ON offer_redemptions(user_id, bar_id);
+      CREATE INDEX IF NOT EXISTS idx_offer_redemptions_offer_id ON offer_redemptions(offer_id);
+      CREATE INDEX IF NOT EXISTS idx_offer_redemptions_status ON offer_redemptions(status);
+      CREATE INDEX IF NOT EXISTS idx_offer_redemptions_expires_at ON offer_redemptions(expires_at);
+
+      CREATE TABLE IF NOT EXISTS offer_redemption_events (
+        id SERIAL PRIMARY KEY,
+        redemption_id VARCHAR(26) NOT NULL REFERENCES offer_redemptions(id) ON DELETE CASCADE,
+        event_type VARCHAR(50) NOT NULL,
+        actor_user_id VARCHAR(26) REFERENCES utenti(id) ON DELETE SET NULL,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_offer_redemption_events_redemption_id ON offer_redemption_events(redemption_id);
+      CREATE INDEX IF NOT EXISTS idx_offer_redemption_events_type ON offer_redemption_events(event_type);
     `);
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
@@ -274,6 +311,8 @@ export class DatabaseService {
     piva: string;
     coverImage: string | null;
     totalPoints: number;
+    frozenPoints: number;
+    availablePoints: number;
     receiptsCount: number;
     lastReceiptAt: Date;
   }>> {
@@ -289,27 +328,13 @@ export class DatabaseService {
         piva: card.piva,
         coverImage: card.coverImage,
         totalPoints: card.totalPoints,
+        frozenPoints: card.frozenPoints,
+        availablePoints: card.availablePoints,
         receiptsCount: card.receiptsCount,
         lastReceiptAt: card.lastReceiptAt as unknown as Date,
       }));
     } catch (error) {
       console.error("❌ Errore durante il recupero delle tessere utente:", error);
-      throw error;
-    }
-  }
-
-  async cleanupLegacyReceiptData(): Promise<void> {
-    try {
-      await this.pool.query(`
-        DROP TABLE IF EXISTS fraud_flags;
-        DROP TABLE IF EXISTS user_fraud_stats;
-        DROP TABLE IF EXISTS receipt_items;
-        DROP TABLE IF EXISTS receipts;
-      `);
-
-      console.log("🧹 Schema legacy scontrini/frodi rimosso");
-    } catch (error) {
-      console.error("❌ Errore durante il cleanup dello schema legacy:", error);
       throw error;
     }
   }

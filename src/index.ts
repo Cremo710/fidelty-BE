@@ -9,6 +9,7 @@ import { loyaltyCardController } from "./controllers/loyaltyCardController.js";
 import { barController } from "./controllers/barController.js";
 import { userRepository } from "./repositories/userRepository.js";
 import { offerController } from "./controllers/offerController.js";
+import { offerRedemptionController } from "./controllers/offerRedemptionController.js";
 import { openingHoursController } from "./controllers/openingHoursController.js";
 import { friendsController } from "./controllers/friendsController.js";
 import { businessRequestController } from "./controllers/businessRequestController.js";
@@ -178,6 +179,10 @@ async function createServer(): Promise<FastifyInstance> {
     return offerController.listOffersByBarId(request, reply);
   });
 
+  app.get("/api/bars/:barId/offers/redemption-context", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return offerRedemptionController.getContext(request, reply);
+  });
+
   // Public endpoint: get opening hours for a specific bar
   app.get("/api/bars/:barId/opening-hours", async (request, reply) => {
     return openingHoursController.getOpeningHoursByBarId(request, reply);
@@ -215,6 +220,14 @@ async function createServer(): Promise<FastifyInstance> {
   // Delete an offer
   app.delete("/api/bar/offers/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
     return offerController.deleteOffer(request, reply);
+  });
+
+  app.post("/api/offers/:offerId/redeem", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return offerRedemptionController.create(request, reply);
+  });
+
+  app.post("/api/offers/redeem/validate", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return offerRedemptionController.validateQr(request, reply);
   });
 
   // ==================== OPENING HOURS ENDPOINTS ====================
@@ -363,13 +376,6 @@ async function startServer(): Promise<FastifyInstance> {
     // Initialize database
     await databaseService.initializeTables();
     console.log("✅ Database inizializzato");
-
-    // Cleanup schema legacy degli scontrini/frodi, inclusi i record storici obsoleti
-    try {
-      await databaseService.cleanupLegacyReceiptData();
-    } catch (err) {
-      console.warn("⚠️ Cleanup schema legacy fallito (non bloccante):", err);
-    }
 
     // Backfill public_id per utenti che non ne hanno uno (idempotente)
     try {

@@ -95,6 +95,17 @@ export class OfferRepository {
     }
   }
 
+  async findById(id: string): Promise<OfferDTO | null> {
+    try {
+      const query = "SELECT * FROM offers WHERE id = $1 LIMIT 1";
+      const result = await databaseService.getPool().query(query, [id]);
+      return result.rows[0] || null;
+    } catch (error) {
+      console.error("❌ Errore durante il recupero offerta per ID:", error);
+      throw error;
+    }
+  }
+
   /**
    * Aggiorna un'offerta esistente
    */
