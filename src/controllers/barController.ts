@@ -348,6 +348,12 @@ export class BarController {
       if (data.cardUseCover !== undefined) {
         data.cardUseCover = data.cardUseCover === "true" || data.cardUseCover === true;
       }
+      if (data.clearCardBackgroundImage !== undefined) {
+        data.clearCardBackgroundImage = data.clearCardBackgroundImage === "true" || data.clearCardBackgroundImage === true;
+      }
+      if (data.cardColor === "") {
+        data.cardColor = null;
+      }
 
       const validation = validateCardConfigInput({
         cardColor: data.cardColor,
@@ -364,7 +370,8 @@ export class BarController {
       }
 
       // Salva immagine background card (opzionale)
-      let cardBgImageUrl: string | null = bar.card_background_image;
+      const clearCardBackgroundImage = data.clearCardBackgroundImage === true;
+      let cardBgImageUrl: string | null = clearCardBackgroundImage ? null : bar.card_background_image;
 
       if (cardBgFileBuffer && cardBgFileName) {
         if (!cardBgFileMimeType || !isImageFile(cardBgFileMimeType)) {

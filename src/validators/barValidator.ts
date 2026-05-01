@@ -66,11 +66,18 @@ export const barRegistrationSchema = z.object({
 
 // Schema per la configurazione della card del bar (Step 2)
 export const cardConfigSchema = z.object({
-  cardColor: z
-    .string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, "Colore non valido (formato HEX richiesto)")
-    .optional()
-    .nullable(),
+  cardColor: z.preprocess(
+    (value) => {
+      if (value === "" || value === "null" || value === "undefined" || value === undefined) {
+        return null;
+      }
+      return value;
+    },
+    z
+      .string()
+      .regex(/^#[0-9A-Fa-f]{6}$/, "Colore non valido (formato HEX richiesto)")
+      .nullable()
+  ).optional(),
   cardUseCover: z
     .boolean()
     .optional(),
