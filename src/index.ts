@@ -21,7 +21,6 @@ const { Client } = pg;
 
 // ==================== CONFIGURATION ====================
 
-// Load environment variables
 config();
 
 type ServerConfig = {
