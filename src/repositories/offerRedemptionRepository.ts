@@ -208,6 +208,27 @@ export class OfferRedemptionRepository {
     return result.rows[0] || null;
   }
 
+  async findById(executor: Queryable, redemptionId: string): Promise<OfferRedemptionWithOfferDTO | null> {
+    const result = await executor.query(
+      `
+        SELECT
+          r.*,
+          o.title AS offer_title,
+          o.description AS offer_description,
+          u.name AS user_name,
+          u.email AS user_email
+        FROM offer_redemptions r
+        LEFT JOIN offers o ON o.id = r.offer_id
+        LEFT JOIN utenti u ON u.id = r.user_id
+        WHERE r.id = $1
+        LIMIT 1
+      `,
+      [redemptionId],
+    );
+
+    return result.rows[0] || null;
+  }
+
   async getLockedLoyaltyCard(executor: Queryable, userId: string, barId: string): Promise<{ id: number; points: number } | null> {
     const result = await executor.query(
       `

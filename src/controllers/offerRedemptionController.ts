@@ -27,6 +27,23 @@ const serializeRedemption = (redemption: OfferRedemptionWithOfferDTO) => ({
   redeemedAt: redemption.redeemed_at,
 });
 
+const serializeRedemptionStatus = (redemption: OfferRedemptionWithOfferDTO) => ({
+  redemptionId: redemption.id,
+  status: redemption.status,
+  expiresAt: redemption.expires_at,
+  redeemedAt: redemption.redeemed_at,
+  offer: {
+    id: redemption.offer_id,
+    title: redemption.offer_title,
+    description: redemption.offer_description,
+  },
+  customer: {
+    id: redemption.user_id,
+    name: redemption.user_name,
+  },
+  pointsRedeemed: Number(redemption.points_amount) || 0,
+});
+
 export class OfferRedemptionController {
   async getContext(request: FastifyRequest, reply: FastifyReply) {
     try {
@@ -205,6 +222,40 @@ export class OfferRedemptionController {
     }
   }
 
+  async getStatus(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = request.userId;
+      const { redemptionId } = (request.params as { redemptionId?: string }) || {};
+
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      if (!redemptionId) {
+        return reply.status(400).send({ success: false, error: "redemptionId mancante", code: "MISSING_REDEMPTION_ID" });
+      }
+
+      await offerRedemptionRepository.expireStaleRedemptions();
+      const redemption = await offerRedemptionRepository.findById(databaseService.getPool(), redemptionId);
+
+      if (!redemption) {
+        return reply.status(404).send({ success: false, error: "Riscatto non trovato", code: "REDEMPTION_NOT_FOUND" });
+      }
+
+      if (redemption.user_id !== userId) {
+        return reply.status(403).send({ success: false, error: "Accesso non consentito", code: "REDEMPTION_FORBIDDEN" });
+      }
+
+      return reply.status(200).send({
+        success: true,
+        data: serializeRedemptionStatus(redemption),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "REDEMPTION_STATUS_ERROR" });
+    }
+  }
+
   async validateQr(request: FastifyRequest, reply: FastifyReply) {
     const client = await databaseService.getPool().connect();
 
@@ -313,19 +364,15 @@ export class OfferRedemptionController {
       return reply.status(200).send({
         success: true,
         data: {
-          redemptionId: redemption.id,
-          offer: {
-            id: redemption.offer_id,
-            title: redemption.offer_title,
-            description: redemption.offer_description,
-          },
+          ...serializeRedemptionStatus({
+            ...redemption,
+            redeemed_at: new Date(),
+          }),
           customer: {
             id: redemption.user_id,
             name: redemption.user_name,
             email: redemption.user_email,
           },
-          pointsRedeemed: Number(redemption.points_amount) || 0,
-          remainingPoints,
           redeemedAt: new Date().toISOString(),
         },
       });
