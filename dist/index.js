@@ -193,9 +193,27 @@ async function createServer() {
     app.post("/api/friends/add", { onRequest: [authenticateToken] }, async (request, reply) => {
         return friendsController.addFriend(request, reply);
     });
+    app.get("/api/friends/requests", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.getRequests(request, reply);
+    });
+    app.post("/api/friends/requests/:requestId/accept", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.acceptRequest(request, reply);
+    });
+    app.post("/api/friends/requests/:requestId/reject", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.rejectRequest(request, reply);
+    });
     // Get friends list
     app.get("/api/friends", { onRequest: [authenticateToken] }, async (request, reply) => {
         return friendsController.getFriends(request, reply);
+    });
+    app.get("/api/friends/:publicId/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.getFriendProfile(request, reply);
+    });
+    app.get("/api/friends/:publicId/transfer-context", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.getTransferContext(request, reply);
+    });
+    app.post("/api/friends/:publicId/transfer-points", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return friendsController.transferPoints(request, reply);
     });
     // Remove a friend
     app.delete("/api/friends/:publicId", { onRequest: [authenticateToken] }, async (request, reply) => {
