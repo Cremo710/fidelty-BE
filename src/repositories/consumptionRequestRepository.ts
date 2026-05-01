@@ -134,42 +134,6 @@ export class ConsumptionRequestRepository {
       }
 
       const pointsEarned = Number(existing.points_preview) || Math.round(Number(existing.amount) * 100);
-      const totalAmount = Number.parseFloat(existing.amount);
-
-      await client.query(
-        `
-          INSERT INTO receipts (
-            id,
-            doc_id,
-            user_id,
-            bar_id,
-            points_earned,
-            merchant_name,
-            merchant_address,
-            merchant_tax_id,
-            total_amount,
-            purchase_date,
-            line_items,
-            image_hash,
-            trust_score,
-            status,
-            updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, $10, NULL, NULL, 'approved', CURRENT_TIMESTAMP)
-        `,
-        [
-          ulid(),
-          `consumption-request:${existing.id}`,
-          existing.requester_user_id,
-          existing.bar_id,
-          pointsEarned,
-          input.barName,
-          input.barAddress,
-          input.barPiva,
-          Number.isFinite(totalAmount) ? totalAmount : 0,
-          JSON.stringify([]),
-        ],
-      );
 
       await loyaltyCardRepository.upsertCardInTransaction(
         client,

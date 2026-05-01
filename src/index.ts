@@ -5,13 +5,11 @@ import { config } from "dotenv";
 import multipart from "@fastify/multipart";
 import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
-import { receiptsController } from "./controllers/receiptsController.js";
+import { loyaltyCardController } from "./controllers/loyaltyCardController.js";
 import { barController } from "./controllers/barController.js";
-import { loyaltyCardRepository } from "./repositories/loyaltyCardRepository.js";
 import { userRepository } from "./repositories/userRepository.js";
 import { offerController } from "./controllers/offerController.js";
 import { openingHoursController } from "./controllers/openingHoursController.js";
-import { visionController } from "./controllers/visionController.js";
 import { friendsController } from "./controllers/friendsController.js";
 import { businessRequestController } from "./controllers/businessRequestController.js";
 import { consumptionRequestController } from "./controllers/consumptionRequestController.js";
@@ -231,33 +229,6 @@ async function createServer(): Promise<FastifyInstance> {
     return openingHoursController.getOpeningHours(request, reply);
   });
 
-  // ==================== RECEIPT ENDPOINTS ====================
-
-  // Receipt processing endpoint (OCR processing via Taggun)
-  app.post("/api/receipts/process", async (request, reply) => {
-    return receiptsController.processReceipt(request, reply);
-  });
-
-  // Receipt confirm endpoint (save to database)
-  app.post("/api/receipts/confirm", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return receiptsController.confirmReceipt(request, reply);
-  });
-
-  // Loyalty cards endpoint for authenticated user
-  app.get("/api/receipts/my-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return receiptsController.getMyLoyaltyCards(request, reply);
-  });
-
-  // Delete a receipt and recalculate loyalty card (protected)
-  app.delete("/api/receipts/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return receiptsController.deleteReceipt(request, reply);
-  });
-
-  // Recalculate all loyalty cards from receipts (protected, admin utility)
-  app.post("/api/receipts/recalculate-cards", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return receiptsController.recalculateCards(request, reply);
-  });
-
   // ==================== FRIENDS ENDPOINTS ====================
 
   // Add a friend by public_id
@@ -320,11 +291,8 @@ async function createServer(): Promise<FastifyInstance> {
     return consumptionRequestController.updateStatus(request, reply);
   });
 
-  // ==================== VISION / OCR ENDPOINTS ====================
-
-  // Extract text from image via Google Cloud Vision
-  app.post("/api/vision/extract-text", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return visionController.extractText(request, reply);
+  app.get("/api/loyalty-cards/my", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return loyaltyCardController.listMine(request, reply);
   });
 
   // Graceful shutdown
@@ -396,11 +364,11 @@ async function startServer(): Promise<FastifyInstance> {
     await databaseService.initializeTables();
     console.log("✅ Database inizializzato");
 
-    // Backfill loyalty_cards dagli scontrini esistenti (idempotente, sicuro ad ogni avvio)
+    // Cleanup schema legacy degli scontrini/frodi, inclusi i record storici obsoleti
     try {
-      await loyaltyCardRepository.backfillFromReceipts();
+      await databaseService.cleanupLegacyReceiptData();
     } catch (err) {
-      console.warn("⚠️ Backfill loyalty_cards fallito (non bloccante):", err);
+      console.warn("⚠️ Cleanup schema legacy fallito (non bloccante):", err);
     }
 
     // Backfill public_id per utenti che non ne hanno uno (idempotente)

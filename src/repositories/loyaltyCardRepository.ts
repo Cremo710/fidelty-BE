@@ -85,7 +85,7 @@ export class LoyaltyCardRepository {
   /**
    * Recupera tutte le carte fedeltà di un utente con i dati del bar.
    * Query diretta sulla tabella loyalty_cards + JOIN bars.
-   * Nessun GROUP BY su receipts → molto più veloce.
+    * Nessun ricalcolo aggregato a runtime → molto più veloce.
    */
   async findByUserId(userId: string): Promise<LoyaltyCardWithBar[]> {
     try {
@@ -142,52 +142,6 @@ export class LoyaltyCardRepository {
     } catch (error) {
       console.error("❌ Errore nel recupero carte fedeltà per utente:", error);
       throw error;
-    }
-  }
-
-  /**
-   * Backfill: popola loyalty_cards dagli scontrini esistenti.
-   * Idempotente grazie a ON CONFLICT DO NOTHING / DO UPDATE.
-   * Da eseguire una sola volta dopo la migrazione.
-   */
-  async backfillFromReceipts(): Promise<number> {
-    const client = await databaseService.getPool().connect();
-
-    try {
-      await client.query("BEGIN");
-
-      const result = await client.query(`
-        INSERT INTO loyalty_cards (user_id, bar_id, points, receipts_count, last_receipt_at, created_at, updated_at)
-        SELECT
-          r.user_id,
-          r.bar_id,
-          COALESCE(SUM(r.points_earned), 0)::int,
-          COUNT(r.id)::int,
-          MAX(r.created_at),
-          MIN(r.created_at),
-          CURRENT_TIMESTAMP
-        FROM receipts r
-        WHERE r.user_id IS NOT NULL
-          AND r.bar_id IS NOT NULL
-        GROUP BY r.user_id, r.bar_id
-        ON CONFLICT (user_id, bar_id) DO UPDATE SET
-          points = EXCLUDED.points,
-          receipts_count = EXCLUDED.receipts_count,
-          last_receipt_at = EXCLUDED.last_receipt_at,
-          updated_at = CURRENT_TIMESTAMP
-      `);
-
-      await client.query("COMMIT");
-
-      const count = result.rowCount || 0;
-      console.log(`✅ Backfill completato: ${count} carte fedeltà create/aggiornate`);
-      return count;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("❌ Errore durante il backfill delle carte fedeltà:", error);
-      throw error;
-    } finally {
-      client.release();
     }
   }
 }
