@@ -200,7 +200,7 @@ export class OfferRedemptionRepository {
         LEFT JOIN offers o ON o.id = r.offer_id
         LEFT JOIN utenti u ON u.id = r.user_id
         WHERE r.id = $1
-        FOR UPDATE
+        FOR UPDATE OF r
       `,
       [redemptionId],
     );
