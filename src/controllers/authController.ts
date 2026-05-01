@@ -376,7 +376,6 @@ export class AuthController {
           id: user.id,
           publicId: user.public_id,
           name: user.name,
-          email: user.email,
         },
       });
     } catch (error) {

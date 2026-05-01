@@ -150,6 +150,64 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_friendships_user_id ON friendships(user_id);
       CREATE INDEX IF NOT EXISTS idx_friendships_friend_id ON friendships(friend_id);
 
+      CREATE TABLE IF NOT EXISTS friendship_requests (
+        id VARCHAR(26) PRIMARY KEY,
+        requester_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        recipient_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        pair_low_user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        pair_high_user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        responded_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CHECK (requester_id <> recipient_id),
+        CHECK (status IN ('pending', 'accepted', 'rejected', 'cancelled'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_friendship_requests_requester_id ON friendship_requests(requester_id);
+      CREATE INDEX IF NOT EXISTS idx_friendship_requests_recipient_id ON friendship_requests(recipient_id);
+      CREATE INDEX IF NOT EXISTS idx_friendship_requests_pair ON friendship_requests(pair_low_user_id, pair_high_user_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_friendship_requests_pending_pair_unique
+        ON friendship_requests(pair_low_user_id, pair_high_user_id)
+        WHERE status = 'pending';
+
+      CREATE TABLE IF NOT EXISTS point_transfers (
+        id VARCHAR(26) PRIMARY KEY,
+        sender_user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        recipient_user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        bar_id VARCHAR(26) NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
+        sender_loyalty_card_id INTEGER NOT NULL REFERENCES loyalty_cards(id) ON DELETE CASCADE,
+        recipient_loyalty_card_id INTEGER NOT NULL REFERENCES loyalty_cards(id) ON DELETE CASCADE,
+        points_amount INTEGER NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        failure_reason TEXT,
+        idempotency_key VARCHAR(64),
+        completed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CHECK (sender_user_id <> recipient_user_id),
+        CHECK (points_amount > 0),
+        CHECK (status IN ('pending', 'completed', 'failed', 'cancelled'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_point_transfers_sender_user_id ON point_transfers(sender_user_id);
+      CREATE INDEX IF NOT EXISTS idx_point_transfers_recipient_user_id ON point_transfers(recipient_user_id);
+      CREATE INDEX IF NOT EXISTS idx_point_transfers_bar_id ON point_transfers(bar_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_point_transfers_sender_idempotency_key
+        ON point_transfers(sender_user_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS point_transfer_events (
+        id SERIAL PRIMARY KEY,
+        transfer_id VARCHAR(26) NOT NULL REFERENCES point_transfers(id) ON DELETE CASCADE,
+        event_type VARCHAR(50) NOT NULL,
+        actor_user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_point_transfer_events_transfer_id ON point_transfer_events(transfer_id);
+
       -- ═══ Business Requests (richieste registrazione bar con approvazione) ═══
       CREATE TABLE IF NOT EXISTS business_requests (
         id VARCHAR(26) PRIMARY KEY,
