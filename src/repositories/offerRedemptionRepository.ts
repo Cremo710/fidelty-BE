@@ -28,6 +28,11 @@ export interface OfferRedemptionWithOfferDTO extends OfferRedemptionDTO {
   user_email: string | null;
 }
 
+export interface OfferRedemptionActivityDTO extends OfferRedemptionWithOfferDTO {
+  bar_name: string | null;
+  bar_logo: string | null;
+}
+
 export interface LoyaltyPointsSnapshot {
   loyaltyCardId: number;
   totalPoints: number;
@@ -109,6 +114,30 @@ export class OfferRedemptionRepository {
         ORDER BY r.created_at DESC
       `,
       [userId, barId],
+    );
+
+    return result.rows;
+  }
+
+  async listActivityByUserId(userId: string): Promise<OfferRedemptionActivityDTO[]> {
+    const result = await databaseService.getPool().query(
+      `
+        SELECT
+          r.*,
+          o.title AS offer_title,
+          o.description AS offer_description,
+          u.name AS user_name,
+          u.email AS user_email,
+          b.name AS bar_name,
+          b.logo AS bar_logo
+        FROM offer_redemptions r
+        LEFT JOIN offers o ON o.id = r.offer_id
+        LEFT JOIN utenti u ON u.id = r.user_id
+        LEFT JOIN bars b ON b.id = r.bar_id
+        WHERE r.user_id = $1
+        ORDER BY COALESCE(r.redeemed_at, r.frozen_at, r.created_at) DESC
+      `,
+      [userId],
     );
 
     return result.rows;

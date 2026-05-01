@@ -17,7 +17,6 @@ import { authenticateToken } from "./middleware/authenticateToken.js";
 import pg from "pg";
 const { Client } = pg;
 // ==================== CONFIGURATION ====================
-// Load environment variables
 config();
 const CONFIG = {
     port: Number(process.env.PORT || 4000),
