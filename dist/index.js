@@ -239,6 +239,9 @@ async function createServer() {
     app.post("/api/consumption-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
         return consumptionRequestController.create(request, reply);
     });
+    app.get("/api/consumption-requests/my", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return consumptionRequestController.listForRequester(request, reply);
+    });
     app.get("/api/consumption-requests/bar/pending", { onRequest: [authenticateToken] }, async (request, reply) => {
         return consumptionRequestController.listPendingForBar(request, reply);
     });

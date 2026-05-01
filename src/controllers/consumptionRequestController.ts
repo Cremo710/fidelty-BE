@@ -1,6 +1,6 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { barRepository } from "../repositories/barRepository.js";
-import { consumptionRequestRepository } from "../repositories/consumptionRequestRepository.js";
+import { consumptionRequestRepository, type ConsumptionRequestDTO, type ConsumptionRequestWithBarDTO } from "../repositories/consumptionRequestRepository.js";
 import { userRepository } from "../repositories/userRepository.js";
 import { consumptionNotificationService } from "../services/consumptionNotificationService.js";
 
@@ -25,8 +25,8 @@ const parseBarQrValue = (rawValue: string): string | null => {
 };
 
 export class ConsumptionRequestController {
-  private mapRequestResponse(row: Awaited<ReturnType<typeof consumptionRequestRepository.createRequest>>) {
-    return {
+  private mapRequestResponse(row: ConsumptionRequestDTO | ConsumptionRequestWithBarDTO) {
+    const baseResponse = {
       id: row.id,
       status: row.status,
       amount: Number.parseFloat(row.amount),
@@ -43,6 +43,41 @@ export class ConsumptionRequestController {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+
+    if ("bar_name" in row) {
+      return {
+        ...baseResponse,
+        bar: {
+          id: row.bar_id,
+          name: row.bar_name,
+          businessName: row.bar_business_name,
+          address: row.bar_address,
+          logo: row.bar_logo,
+          piva: row.bar_piva,
+        },
+      };
+    }
+
+    return baseResponse;
+  }
+
+  async listForRequester(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const requests = await consumptionRequestRepository.listByRequesterUserId(userId);
+
+      return reply.status(200).send({
+        success: true,
+        data: requests.map((row) => this.mapRequestResponse(row)),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_LIST_ERROR" });
+    }
   }
 
   async resolveBarFromQr(request: FastifyRequest, reply: FastifyReply) {

@@ -20,6 +20,14 @@ export interface ConsumptionRequestDTO {
   updated_at: Date;
 }
 
+export interface ConsumptionRequestWithBarDTO extends ConsumptionRequestDTO {
+  bar_name: string | null;
+  bar_business_name: string | null;
+  bar_address: string | null;
+  bar_logo: string | null;
+  bar_piva: string | null;
+}
+
 export class ConsumptionRequestRepository {
   async createRequest(input: {
     requesterUserId: string;
@@ -71,6 +79,25 @@ export class ConsumptionRequestRepository {
     `;
 
     const result = await databaseService.getPool().query(query, [barId]);
+    return result.rows;
+  }
+
+  async listByRequesterUserId(userId: string): Promise<ConsumptionRequestWithBarDTO[]> {
+    const query = `
+      SELECT
+        cr.*,
+        b.name AS bar_name,
+        b.merchant_name AS bar_business_name,
+        b.address AS bar_address,
+        b.logo AS bar_logo,
+        b.iva AS bar_piva
+      FROM consumption_requests cr
+      LEFT JOIN bars b ON b.id = cr.bar_id
+      WHERE cr.requester_user_id = $1
+      ORDER BY cr.created_at DESC
+    `;
+
+    const result = await databaseService.getPool().query(query, [userId]);
     return result.rows;
   }
 
