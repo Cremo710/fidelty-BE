@@ -176,6 +176,9 @@ async function createServer() {
     app.post("/api/offers/:offerId/redeem", { onRequest: [authenticateToken] }, async (request, reply) => {
         return offerRedemptionController.create(request, reply);
     });
+    app.get("/api/offers/redemptions/:redemptionId/status", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return offerRedemptionController.getStatus(request, reply);
+    });
     app.post("/api/offers/redeem/validate", { onRequest: [authenticateToken] }, async (request, reply) => {
         return offerRedemptionController.validateQr(request, reply);
     });
