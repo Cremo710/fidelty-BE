@@ -713,6 +713,32 @@ export class BarController {
     }
   }
 
+  async getRanking(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      const { barId } = request.params as { barId?: string };
+
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      if (!barId) {
+        return reply.status(400).send({ success: false, error: "barId obbligatorio", code: "MISSING_BAR_ID" });
+      }
+
+      const bar = await barRepository.findById(barId);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      const ranking = await barRepository.getBarRanking(barId, userId);
+      return reply.status(200).send({ success: true, data: ranking });
+    } catch (error) {
+      console.error("❌ Errore durante il recupero della classifica bar:", error);
+      return reply.status(500).send({ success: false, error: "Errore durante il recupero della classifica bar", code: "BAR_RANKING_ERROR" });
+    }
+  }
+
   /**
    * Handler per la registrazione completa e atomica del bar.
    * Raccoglie dati di tutti gli step (bar info, card config, offerte, orari)

@@ -84,6 +84,15 @@ export interface BarDashboardStats {
   activities: BarActivityItem[];
 }
 
+export interface BarRankingEntry {
+  userId: string;
+  publicId: string;
+  name: string;
+  profileImage: string | null;
+  points: number;
+  position: number;
+}
+
 /**
  * Repository pattern per l'accesso ai dati dei bar
  * Astrae la logica di interazione con il database
@@ -268,6 +277,85 @@ export class BarRepository {
       console.error('❌ Errore durante il recupero dei bar:', error);
       throw error;
     }
+  }
+
+  async getBarRanking(barId: string, currentUserId: string, limit = 10): Promise<{
+    topEntries: BarRankingEntry[];
+    currentUserEntry: BarRankingEntry | null;
+    participantsCount: number;
+  }> {
+    const [topEntriesResult, currentUserResult, participantsResult] = await Promise.all([
+      databaseService.getPool().query(
+        `
+          WITH ranked AS (
+            SELECT
+              u.id AS "userId",
+              u.public_id AS "publicId",
+              u.name,
+              u.profile_image AS "profileImage",
+              lc.points::int AS points,
+              ROW_NUMBER() OVER (
+                ORDER BY lc.points DESC, u.name ASC, u.id ASC
+              )::int AS position
+            FROM loyalty_cards lc
+            JOIN utenti u ON u.id = lc.user_id
+            WHERE lc.bar_id = $1
+          )
+          SELECT *
+          FROM ranked
+          ORDER BY position ASC
+          LIMIT $2
+        `,
+        [barId, limit],
+      ),
+      databaseService.getPool().query(
+        `
+          WITH ranked AS (
+            SELECT
+              u.id AS "userId",
+              u.public_id AS "publicId",
+              u.name,
+              u.profile_image AS "profileImage",
+              lc.points::int AS points,
+              ROW_NUMBER() OVER (
+                ORDER BY lc.points DESC, u.name ASC, u.id ASC
+              )::int AS position
+            FROM loyalty_cards lc
+            JOIN utenti u ON u.id = lc.user_id
+            WHERE lc.bar_id = $1
+          )
+          SELECT *
+          FROM ranked
+          WHERE "userId" = $2
+          LIMIT 1
+        `,
+        [barId, currentUserId],
+      ),
+      databaseService.getPool().query(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM loyalty_cards
+          WHERE bar_id = $1
+        `,
+        [barId],
+      ),
+    ]);
+
+    return {
+      topEntries: topEntriesResult.rows.map((row) => ({
+        ...row,
+        points: Number(row.points) || 0,
+        position: Number(row.position) || 0,
+      })),
+      currentUserEntry: currentUserResult.rows[0]
+        ? {
+            ...currentUserResult.rows[0],
+            points: Number(currentUserResult.rows[0].points) || 0,
+            position: Number(currentUserResult.rows[0].position) || 0,
+          }
+        : null,
+      participantsCount: Number(participantsResult.rows[0]?.total) || 0,
+    };
   }
 
   /**

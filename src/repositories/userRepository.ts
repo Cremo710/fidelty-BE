@@ -12,6 +12,23 @@ export interface UserDTO {
   updated_at: Date;
 }
 
+export interface RankingEntry {
+  userId: string;
+  publicId: string;
+  name: string;
+  profileImage: string | null;
+  points: number;
+  position: number;
+}
+
+export interface UserBarRankingEntry {
+  barId: string;
+  barName: string;
+  points: number;
+  position: number;
+  participantsCount: number;
+}
+
 /**
  * Repository pattern per l'accesso ai dati degli utenti
  * Astrae la logica di interazione con il database
@@ -274,6 +291,116 @@ export class UserRepository {
       throw error;
     }
   }
+
+  async getGlobalRanking(currentUserId: string, limit = 10): Promise<{
+    topEntries: RankingEntry[];
+    currentUserEntry: RankingEntry | null;
+    participantsCount: number;
+  }> {
+    const [topEntriesResult, currentUserResult, participantsResult] = await Promise.all([
+      databaseService.getPool().query(
+        `
+          WITH ranked AS (
+            SELECT
+              u.id AS "userId",
+              u.public_id AS "publicId",
+              u.name,
+              u.profile_image AS "profileImage",
+              COALESCE(SUM(lc.points), 0)::int AS points,
+              ROW_NUMBER() OVER (
+                ORDER BY COALESCE(SUM(lc.points), 0) DESC, u.name ASC, u.id ASC
+              )::int AS position
+            FROM utenti u
+            JOIN loyalty_cards lc ON lc.user_id = u.id
+            GROUP BY u.id, u.public_id, u.name, u.profile_image
+          )
+          SELECT *
+          FROM ranked
+          ORDER BY position ASC
+          LIMIT $1
+        `,
+        [limit],
+      ),
+      databaseService.getPool().query(
+        `
+          WITH ranked AS (
+            SELECT
+              u.id AS "userId",
+              u.public_id AS "publicId",
+              u.name,
+              u.profile_image AS "profileImage",
+              COALESCE(SUM(lc.points), 0)::int AS points,
+              ROW_NUMBER() OVER (
+                ORDER BY COALESCE(SUM(lc.points), 0) DESC, u.name ASC, u.id ASC
+              )::int AS position
+            FROM utenti u
+            JOIN loyalty_cards lc ON lc.user_id = u.id
+            GROUP BY u.id, u.public_id, u.name, u.profile_image
+          )
+          SELECT *
+          FROM ranked
+          WHERE "userId" = $1
+          LIMIT 1
+        `,
+        [currentUserId],
+      ),
+      databaseService.getPool().query(
+        `
+          SELECT COUNT(DISTINCT user_id)::int AS total
+          FROM loyalty_cards
+        `,
+      ),
+    ]);
+
+    return {
+      topEntries: topEntriesResult.rows.map((row) => ({
+        ...row,
+        points: Number(row.points) || 0,
+        position: Number(row.position) || 0,
+      })),
+      currentUserEntry: currentUserResult.rows[0]
+        ? {
+            ...currentUserResult.rows[0],
+            points: Number(currentUserResult.rows[0].points) || 0,
+            position: Number(currentUserResult.rows[0].position) || 0,
+          }
+        : null,
+      participantsCount: Number(participantsResult.rows[0]?.total) || 0,
+    };
+  }
+
+  async getUserBarRankings(userId: string): Promise<UserBarRankingEntry[]> {
+      const result = await databaseService.getPool().query(
+        `
+          WITH ranked AS (
+            SELECT
+              lc.bar_id AS "barId",
+              b.name AS "barName",
+              lc.user_id AS "userId",
+              lc.points::int AS points,
+              ROW_NUMBER() OVER (
+                PARTITION BY lc.bar_id
+                ORDER BY lc.points DESC, b.name ASC, lc.user_id ASC
+              )::int AS position,
+              COUNT(*) OVER (PARTITION BY lc.bar_id)::int AS "participantsCount"
+            FROM loyalty_cards lc
+            JOIN bars b ON b.id = lc.bar_id
+          )
+          SELECT "barId", "barName", points, position, "participantsCount"
+          FROM ranked
+          WHERE "userId" = $1
+          ORDER BY position ASC, points DESC, "barName" ASC
+        `,
+        [userId],
+      );
+
+      return result.rows.map((row) => ({
+        ...row,
+        points: Number(row.points) || 0,
+        position: Number(row.position) || 0,
+        participantsCount: Number(row.participantsCount) || 0,
+      }));
+    }
 
   /**
    * Genera un public_id unico nel formato FU-XXXXX (5 caratteri alfanumerici)

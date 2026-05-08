@@ -125,6 +125,10 @@ async function createServer(): Promise<FastifyInstance> {
     return authController.getProfile(request, reply);
   });
 
+  app.get("/api/auth/profile/ranking", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return authController.getRanking(request, reply);
+  });
+
   // Upload/update profile photo (protected route)
   app.patch("/api/auth/profile-photo", { onRequest: [authenticateToken] }, async (request, reply) => {
     return authController.uploadProfilePhoto(request, reply);
@@ -171,6 +175,10 @@ async function createServer(): Promise<FastifyInstance> {
   // Public endpoint: list bars with coordinates for map preview
   app.get("/api/bars", async (request, reply) => {
     return barController.listBars(request, reply);
+  });
+
+  app.get("/api/bars/:barId/ranking", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.getRanking(request, reply);
   });
 
   // Public endpoint: get offers for a specific bar

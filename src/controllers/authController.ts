@@ -343,6 +343,41 @@ export class AuthController {
     }
   }
 
+  async getRanking(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+
+      if (!userId) {
+        return reply.status(401).send({
+          success: false,
+          error: "Utente non autenticato",
+          code: "UNAUTHORIZED",
+        });
+      }
+
+      const [globalRanking, barRankings] = await Promise.all([
+        userRepository.getGlobalRanking(userId),
+        userRepository.getUserBarRankings(userId),
+      ]);
+
+      return reply.status(200).send({
+        success: true,
+        data: {
+          global: globalRanking,
+          bars: barRankings,
+        },
+      });
+    } catch (error) {
+      console.error("❌ Errore durante il recupero della classifica utente:", error);
+
+      return reply.status(500).send({
+        success: false,
+        error: "Errore durante il recupero della classifica",
+        code: "PROFILE_RANKING_ERROR",
+      });
+    }
+  }
+
   /**
    * Handler per la ricerca utente tramite public_id
    * GET /api/users/search?public_id=FU-XXXXX
