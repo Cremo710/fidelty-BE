@@ -48,6 +48,13 @@ function maskValue(value: string | undefined | null): string {
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
+function normalizeEmailProvider(value: string | undefined): "auto" | "resend" | "smtp" {
+  if (value === "resend" || value === "smtp") {
+    return value;
+  }
+  return "auto";
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -65,6 +72,7 @@ class EmailService {
 
   private getResendConfig() {
     return {
+      provider: normalizeEmailProvider(process.env.EMAIL_PROVIDER),
       apiKey: process.env.RESEND_API_KEY,
       fromEmail: process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM || "onboarding@resend.dev",
       fromName: process.env.RESEND_FROM_NAME || process.env.EMAIL_FROM_NAME || "Fidelty",
@@ -74,10 +82,27 @@ class EmailService {
   private logResendConfig(context: string) {
     const config = this.getResendConfig();
     console.log(`📨 Resend ${context}`, {
+      provider: config.provider,
       configured: Boolean(config.apiKey),
       fromEmail: config.fromEmail,
       fromName: config.fromName,
     });
+  }
+
+  private shouldUseResend() {
+    const config = this.getResendConfig();
+    if (config.provider === "resend") {
+      return true;
+    }
+    if (config.provider === "smtp") {
+      return false;
+    }
+    return Boolean(config.apiKey);
+  }
+
+  private shouldAllowSmtpFallback() {
+    const config = this.getResendConfig();
+    return config.provider === "auto";
   }
 
   private getResendClient(): Resend | null {
@@ -122,8 +147,12 @@ class EmailService {
     text: string;
     kind: string;
   }): Promise<EmailSendResult> {
-    const resendClient = this.getResendClient();
-    if (resendClient) {
+    if (this.shouldUseResend()) {
+      const resendClient = this.getResendClient();
+      if (!resendClient) {
+        throw new Error("Resend richiesto ma non configurato. Imposta RESEND_API_KEY.");
+      }
+
       const resendConfig = this.getResendConfig();
       try {
         const resendResponse = await resendClient.emails.send({
@@ -149,6 +178,10 @@ class EmailService {
           recipient: input.recipientEmail,
           message: error instanceof Error ? error.message : String(error),
         });
+
+        if (!this.shouldAllowSmtpFallback()) {
+          throw error;
+        }
       }
     }
 

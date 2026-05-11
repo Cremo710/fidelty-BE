@@ -50,7 +50,7 @@ export const emailRequestSchema = z.object({
 export const verifyEmailSchema = z.object({
   token: z
     .string()
-    .min(6, "Token di verifica obbligatorio")
+    .regex(/^\d{6}$/, "Il codice di verifica deve contenere 6 cifre")
     .trim(),
 });
 

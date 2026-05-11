@@ -32,6 +32,10 @@ function getPasswordResetTtlMinutes() {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PASSWORD_RESET_TTL_MINUTES;
 }
 
+function createEmailVerificationToken() {
+  return String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, "0");
+}
+
 function createRawToken() {
   return randomBytes(24).toString("hex");
 }
@@ -46,7 +50,7 @@ function hashRawToken(token: string) {
  */
 export class AuthController {
   private async issueEmailVerification(user: { id: string; email: string; name: string | null }) {
-    const rawToken = createRawToken();
+    const rawToken = createEmailVerificationToken();
     const ttlHours = getEmailVerificationTtlHours();
     const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
 

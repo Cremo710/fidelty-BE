@@ -33,6 +33,7 @@ In fase di test il backend puo usare Resend come provider primario. Se Resend no
 Variabili richieste:
 
 ```bash
+EMAIL_PROVIDER=auto
 RESEND_API_KEY=your-resend-api-key
 RESEND_FROM_EMAIL=onboarding@resend.dev
 RESEND_FROM_NAME=Fidelty
@@ -55,7 +56,9 @@ Se queste variabili non sono configurate, la richiesta viene comunque elaborata 
 
 Note pratiche:
 
-- se `RESEND_API_KEY` e configurata, Resend viene usato come primo canale di invio
+- `EMAIL_PROVIDER=resend` forza l'uso di Resend e impedisce il fallback a SMTP
+- `EMAIL_PROVIDER=auto` prova Resend se configurato e, solo in quel caso, puo ricadere su SMTP
+- `EMAIL_PROVIDER=smtp` disabilita Resend
 - per i test iniziali con Resend puoi usare `onboarding@resend.dev` come mittente
 - porta 465: usa `SMTP_SECURE=true`
 - porta 587: usa `SMTP_SECURE=false` e, se richiesto dal provider, `SMTP_REQUIRE_TLS=true`
