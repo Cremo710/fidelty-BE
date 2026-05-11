@@ -452,12 +452,23 @@ export class AuthController {
       const input = validation.data as EmailRequestInput;
       const user = await userRepository.findByEmail(input.email);
       if (user) {
-        await this.issuePasswordReset({ id: user.id, email: user.email, name: user.name });
+        const dispatchResult = await this.issuePasswordReset({ id: user.id, email: user.email, name: user.name });
+        if (!dispatchResult.sent) {
+          console.warn(`⚠️ Invio email reset non disponibile per ${input.email}: ${dispatchResult.skippedReason || "unknown"}`);
+          return reply.status(503).send({
+            success: false,
+            error: "Il servizio email non e' al momento disponibile. Riprova piu' tardi.",
+            code: "EMAIL_DELIVERY_UNAVAILABLE",
+          });
+        }
       }
 
       return reply.status(200).send({
         success: true,
         message: "Se l'account esiste, abbiamo inviato un codice per reimpostare la password",
+        data: {
+          emailDispatched: Boolean(user),
+        },
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
