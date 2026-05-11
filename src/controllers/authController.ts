@@ -439,8 +439,10 @@ export class AuthController {
 
   async requestPasswordReset(request: FastifyRequest, reply: FastifyReply) {
     try {
+      console.log("🔐 Ricevuta richiesta reset password");
       const validation = validateEmailRequestInput(request.body as unknown);
       if (!validation.success) {
+        console.warn("⚠️ Validazione reset password fallita", validation.errors);
         return reply.status(400).send({
           success: false,
           error: "Dati di input non validi",
@@ -450,8 +452,10 @@ export class AuthController {
       }
 
       const input = validation.data as EmailRequestInput;
+      console.log(`🔎 Reset password richiesto per email: ${input.email}`);
       const user = await userRepository.findByEmail(input.email);
       if (user) {
+        console.log(`👤 Utente trovato per reset password: ${user.id}`);
         const dispatchResult = await this.issuePasswordReset({ id: user.id, email: user.email, name: user.name });
         if (!dispatchResult.sent) {
           console.warn(`⚠️ Invio email reset non disponibile per ${input.email}: ${dispatchResult.skippedReason || "unknown"}`);
@@ -461,6 +465,10 @@ export class AuthController {
             code: "EMAIL_DELIVERY_UNAVAILABLE",
           });
         }
+
+        console.log(`📧 Invio reset password completato per ${input.email}`);
+      } else {
+        console.log(`ℹ️ Nessun utente trovato per reset password: ${input.email}`);
       }
 
       return reply.status(200).send({
@@ -471,6 +479,7 @@ export class AuthController {
         },
       });
     } catch (error) {
+      console.error("❌ requestPasswordReset failed:", error);
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
       return reply.status(500).send({ success: false, error: errorMessage, code: "PASSWORD_RESET_REQUEST_ERROR" });
     }
