@@ -28,9 +28,15 @@ CORS is configured to allow requests from localhost origins (Expo web uses `http
 
 Quando una business request viene approvata o rifiutata, il backend puo inviare una email automatica all'utente con l'esito della richiesta e le conseguenze dell'operazione.
 
+In fase di test il backend puo usare Resend come provider primario. Se Resend non e configurato o fallisce, rimane disponibile il fallback SMTP.
+
 Variabili richieste:
 
 ```bash
+RESEND_API_KEY=your-resend-api-key
+RESEND_FROM_EMAIL=onboarding@resend.dev
+RESEND_FROM_NAME=Fidelty
+
 SMTP_HOST=smtp.your-provider.com
 SMTP_PORT=587
 SMTP_SECURE=false
@@ -49,6 +55,8 @@ Se queste variabili non sono configurate, la richiesta viene comunque elaborata 
 
 Note pratiche:
 
+- se `RESEND_API_KEY` e configurata, Resend viene usato come primo canale di invio
+- per i test iniziali con Resend puoi usare `onboarding@resend.dev` come mittente
 - porta 465: usa `SMTP_SECURE=true`
 - porta 587: usa `SMTP_SECURE=false` e, se richiesto dal provider, `SMTP_REQUIRE_TLS=true`
 - se in hosting vedi `ETIMEDOUT` durante la connessione SMTP, il backend sta raggiungendo male `SMTP_HOST:SMTP_PORT` oppure il provider richiede TLS/servername diversi

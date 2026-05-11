@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
 type BusinessDecisionStatus = "CONFIRMED" | "REFUSED";
 
@@ -57,8 +58,46 @@ function escapeHtml(value: string): string {
 }
 
 class EmailService {
+  private resendClient: Resend | null = null;
+  private resendInitialized = false;
   private transporter: nodemailer.Transporter | null = null;
   private initialized = false;
+
+  private getResendConfig() {
+    return {
+      apiKey: process.env.RESEND_API_KEY,
+      fromEmail: process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM || "onboarding@resend.dev",
+      fromName: process.env.RESEND_FROM_NAME || process.env.EMAIL_FROM_NAME || "Fidelty",
+    };
+  }
+
+  private logResendConfig(context: string) {
+    const config = this.getResendConfig();
+    console.log(`📨 Resend ${context}`, {
+      configured: Boolean(config.apiKey),
+      fromEmail: config.fromEmail,
+      fromName: config.fromName,
+    });
+  }
+
+  private getResendClient(): Resend | null {
+    if (this.resendInitialized) {
+      return this.resendClient;
+    }
+
+    this.resendInitialized = true;
+
+    const config = this.getResendConfig();
+    if (!config.apiKey) {
+      console.warn("⚠️ Resend non configurato: RESEND_API_KEY mancante");
+      this.resendClient = null;
+      return null;
+    }
+
+    this.logResendConfig("client initialized");
+    this.resendClient = new Resend(config.apiKey);
+    return this.resendClient;
+  }
 
   private logEmailConfig(context: string) {
     const config = this.getConfig();
@@ -83,6 +122,36 @@ class EmailService {
     text: string;
     kind: string;
   }): Promise<EmailSendResult> {
+    const resendClient = this.getResendClient();
+    if (resendClient) {
+      const resendConfig = this.getResendConfig();
+      try {
+        const resendResponse = await resendClient.emails.send({
+          from: `${resendConfig.fromName} <${resendConfig.fromEmail}>`,
+          to: input.recipientEmail,
+          subject: input.subject,
+          html: input.html,
+          text: input.text,
+        });
+
+        if (resendResponse.error) {
+          throw new Error(resendResponse.error.message || "Resend send failed");
+        }
+
+        console.log(`📨 Email ${input.kind} inviata via Resend a ${input.recipientEmail} usando ${resendConfig.fromEmail}`);
+        return {
+          sent: true,
+          recipient: input.recipientEmail,
+        };
+      } catch (error) {
+        this.logResendConfig(`send failure while sending ${input.kind}`);
+        console.error(`❌ Email ${input.kind} failed via Resend`, {
+          recipient: input.recipientEmail,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const transporter = this.getTransporter();
     if (!transporter) {
       return {
