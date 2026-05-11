@@ -49,6 +49,41 @@ class EmailService {
   private transporter: nodemailer.Transporter | null = null;
   private initialized = false;
 
+  private async sendWithDefaultSender(input: {
+    recipientEmail: string;
+    subject: string;
+    html: string;
+    text: string;
+    kind: string;
+  }): Promise<EmailSendResult> {
+    const transporter = this.getTransporter();
+    if (!transporter) {
+      return {
+        sent: false,
+        skippedReason: "email_not_configured",
+        recipient: input.recipientEmail,
+      };
+    }
+
+    const { fromEmail, fromName } = this.getConfig();
+
+    await transporter.sendMail({
+      from: `${fromName} <${fromEmail}>`,
+      sender: fromEmail,
+      replyTo: fromEmail,
+      to: input.recipientEmail,
+      subject: input.subject,
+      html: input.html,
+      text: input.text,
+    });
+
+    console.log(`📧 Email ${input.kind} inviata a ${input.recipientEmail} usando ${fromEmail}`);
+    return {
+      sent: true,
+      recipient: input.recipientEmail,
+    };
+  }
+
   private getConfig() {
     return {
       host: process.env.SMTP_HOST,
@@ -259,87 +294,41 @@ class EmailService {
   }
 
   async sendBusinessRequestDecisionEmail(input: BusinessDecisionEmailInput): Promise<EmailSendResult> {
-    const transporter = this.getTransporter();
-    if (!transporter) {
-      return {
-        sent: false,
-        skippedReason: "email_not_configured",
-        recipient: input.recipientEmail,
-      };
-    }
-
-    const { fromEmail, fromName } = this.getConfig();
     const template = input.status === "CONFIRMED"
       ? this.buildApprovalTemplate(input)
       : this.buildRefusalTemplate(input);
 
-    await transporter.sendMail({
-      from: `${fromName} <${fromEmail}>`,
-      to: input.recipientEmail,
+    return this.sendWithDefaultSender({
+      recipientEmail: input.recipientEmail,
       subject: template.subject,
       html: template.html,
       text: template.text,
+      kind: "esito business request",
     });
-
-    console.log(`📧 Email esito business request inviata a ${input.recipientEmail}`);
-    return {
-      sent: true,
-      recipient: input.recipientEmail,
-    };
   }
 
   async sendEmailVerificationEmail(input: EmailVerificationInput): Promise<EmailSendResult> {
-    const transporter = this.getTransporter();
-    if (!transporter) {
-      return {
-        sent: false,
-        skippedReason: "email_not_configured",
-        recipient: input.recipientEmail,
-      };
-    }
-
-    const { fromEmail, fromName } = this.getConfig();
     const template = this.buildEmailVerificationTemplate(input);
 
-    await transporter.sendMail({
-      from: `${fromName} <${fromEmail}>`,
-      to: input.recipientEmail,
+    return this.sendWithDefaultSender({
+      recipientEmail: input.recipientEmail,
       subject: template.subject,
       html: template.html,
       text: template.text,
+      kind: "verifica email",
     });
-
-    return {
-      sent: true,
-      recipient: input.recipientEmail,
-    };
   }
 
   async sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<EmailSendResult> {
-    const transporter = this.getTransporter();
-    if (!transporter) {
-      return {
-        sent: false,
-        skippedReason: "email_not_configured",
-        recipient: input.recipientEmail,
-      };
-    }
-
-    const { fromEmail, fromName } = this.getConfig();
     const template = this.buildPasswordResetTemplate(input);
 
-    await transporter.sendMail({
-      from: `${fromName} <${fromEmail}>`,
-      to: input.recipientEmail,
+    return this.sendWithDefaultSender({
+      recipientEmail: input.recipientEmail,
       subject: template.subject,
       html: template.html,
       text: template.text,
+      kind: "reset password",
     });
-
-    return {
-      sent: true,
-      recipient: input.recipientEmail,
-    };
   }
 }
 
