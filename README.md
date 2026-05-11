@@ -38,6 +38,17 @@ SMTP_USER=your-smtp-user
 SMTP_PASS=your-smtp-password
 EMAIL_FROM=no-reply@fidelty.app
 EMAIL_FROM_NAME=Fidelty
+SMTP_REQUIRE_TLS=false
+SMTP_TLS_SERVERNAME=smtp.your-provider.com
+SMTP_CONNECTION_TIMEOUT_MS=10000
+SMTP_GREETING_TIMEOUT_MS=10000
+SMTP_SOCKET_TIMEOUT_MS=20000
 ```
 
 Se queste variabili non sono configurate, la richiesta viene comunque elaborata ma l'invio email viene saltato e loggato come non configurato.
+
+Note pratiche:
+
+- porta 465: usa `SMTP_SECURE=true`
+- porta 587: usa `SMTP_SECURE=false` e, se richiesto dal provider, `SMTP_REQUIRE_TLS=true`
+- se in hosting vedi `ETIMEDOUT` durante la connessione SMTP, il backend sta raggiungendo male `SMTP_HOST:SMTP_PORT` oppure il provider richiede TLS/servername diversi

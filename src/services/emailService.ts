@@ -36,6 +36,17 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   return value === "true" || value === "1";
 }
 
+function parseNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function maskValue(value: string | undefined | null): string {
+  if (!value) return "not-set";
+  if (value.length <= 6) return "***";
+  return `${value.slice(0, 2)}***${value.slice(-2)}`;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -48,6 +59,22 @@ function escapeHtml(value: string): string {
 class EmailService {
   private transporter: nodemailer.Transporter | null = null;
   private initialized = false;
+
+  private logEmailConfig(context: string) {
+    const config = this.getConfig();
+    console.log(`📮 EmailService ${context}`, {
+      host: config.host || "not-set",
+      port: config.port,
+      secure: config.secure,
+      requireTLS: config.requireTLS,
+      connectionTimeout: config.connectionTimeout,
+      greetingTimeout: config.greetingTimeout,
+      socketTimeout: config.socketTimeout,
+      tlsServername: config.tlsServername || "not-set",
+      user: maskValue(config.user),
+      fromEmail: config.fromEmail || "not-set",
+    });
+  }
 
   private async sendWithDefaultSender(input: {
     recipientEmail: string;
@@ -67,15 +94,26 @@ class EmailService {
 
     const { fromEmail, fromName } = this.getConfig();
 
-    await transporter.sendMail({
-      from: `${fromName} <${fromEmail}>`,
-      sender: fromEmail,
-      replyTo: fromEmail,
-      to: input.recipientEmail,
-      subject: input.subject,
-      html: input.html,
-      text: input.text,
-    });
+    try {
+      await transporter.sendMail({
+        from: `${fromName} <${fromEmail}>`,
+        sender: fromEmail,
+        replyTo: fromEmail,
+        to: input.recipientEmail,
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
+      });
+    } catch (error) {
+      this.logEmailConfig(`send failure while sending ${input.kind}`);
+      console.error(`❌ Email ${input.kind} failed`, {
+        recipient: input.recipientEmail,
+        code: (error as any)?.code || "unknown",
+        command: (error as any)?.command || "unknown",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
 
     console.log(`📧 Email ${input.kind} inviata a ${input.recipientEmail} usando ${fromEmail}`);
     return {
@@ -87,12 +125,17 @@ class EmailService {
   private getConfig() {
     return {
       host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
+      port: parseNumber(process.env.SMTP_PORT, 587),
       secure: parseBoolean(process.env.SMTP_SECURE, false),
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
       fromEmail: process.env.EMAIL_FROM || process.env.SMTP_FROM,
       fromName: process.env.EMAIL_FROM_NAME || "Fidelty",
+      requireTLS: parseBoolean(process.env.SMTP_REQUIRE_TLS, false),
+      connectionTimeout: parseNumber(process.env.SMTP_CONNECTION_TIMEOUT_MS, 10000),
+      greetingTimeout: parseNumber(process.env.SMTP_GREETING_TIMEOUT_MS, 10000),
+      socketTimeout: parseNumber(process.env.SMTP_SOCKET_TIMEOUT_MS, 20000),
+      tlsServername: process.env.SMTP_TLS_SERVERNAME,
     };
   }
 
@@ -115,13 +158,21 @@ class EmailService {
     }
 
     const config = this.getConfig();
+    this.logEmailConfig("creating transporter with config");
     this.transporter = nodemailer.createTransport({
       host: config.host,
       port: config.port,
       secure: config.secure,
+      requireTLS: config.requireTLS,
+      connectionTimeout: config.connectionTimeout,
+      greetingTimeout: config.greetingTimeout,
+      socketTimeout: config.socketTimeout,
       auth: {
         user: config.user,
         pass: config.pass,
+      },
+      tls: {
+        servername: config.tlsServername || config.host,
       },
     });
 
