@@ -8,6 +8,8 @@ export interface UserDTO {
   email: string;
   password: string;
   profile_image: string | null;
+  is_email_verified: boolean;
+  email_verified_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -52,8 +54,8 @@ export class UserRepository {
       const id = ulid();
       const publicId = await this.generateUniquePublicId(client);
       const query = `
-        INSERT INTO utenti (id, public_id, name, email, password, updated_at)
-        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+        INSERT INTO utenti (id, public_id, name, email, password, is_email_verified, email_verified_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, false, NULL, CURRENT_TIMESTAMP)
         ON CONFLICT (email) DO UPDATE SET
           name = EXCLUDED.name,
           password = EXCLUDED.password,
@@ -156,6 +158,14 @@ export class UserRepository {
       if (updates.profile_image !== undefined) {
         fields.push(`profile_image = $${paramCount++}`);
         values.push(updates.profile_image);
+      }
+      if (updates.is_email_verified !== undefined) {
+        fields.push(`is_email_verified = $${paramCount++}`);
+        values.push(updates.is_email_verified);
+      }
+      if (updates.email_verified_at !== undefined) {
+        fields.push(`email_verified_at = $${paramCount++}`);
+        values.push(updates.email_verified_at);
       }
 
       if (fields.length === 0) {
@@ -272,6 +282,136 @@ export class UserRepository {
       console.log(`✅ Tutti i refresh token revocati per utente: ${userId}`);
     } catch (error) {
       console.error("Errore nella revoca dei refresh token:", error);
+      throw error;
+    }
+  }
+
+  async storeEmailVerificationToken(userId: string, tokenHash: string, expiresAt: Date): Promise<void> {
+    const client = await databaseService.getPool().connect();
+
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `
+          UPDATE email_verification_tokens
+          SET consumed_at = CURRENT_TIMESTAMP
+          WHERE user_id = $1 AND consumed_at IS NULL
+        `,
+        [userId],
+      );
+      await client.query(
+        `
+          INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
+          VALUES ($1, $2, $3)
+        `,
+        [userId, tokenHash, expiresAt],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Errore nel salvataggio del token di verifica email:", error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async consumeEmailVerificationToken(tokenHash: string): Promise<string | null> {
+    const query = `
+      UPDATE email_verification_tokens
+      SET consumed_at = CURRENT_TIMESTAMP
+      WHERE token_hash = $1
+        AND consumed_at IS NULL
+        AND expires_at > CURRENT_TIMESTAMP
+      RETURNING user_id
+    `;
+
+    try {
+      const result = await databaseService.getPool().query(query, [tokenHash]);
+      return result.rows[0]?.user_id || null;
+    } catch (error) {
+      console.error("Errore nel consumo del token di verifica email:", error);
+      throw error;
+    }
+  }
+
+  async invalidateEmailVerificationTokens(userId: string): Promise<void> {
+    try {
+      await databaseService.getPool().query(
+        `
+          UPDATE email_verification_tokens
+          SET consumed_at = CURRENT_TIMESTAMP
+          WHERE user_id = $1 AND consumed_at IS NULL
+        `,
+        [userId],
+      );
+    } catch (error) {
+      console.error("Errore nell'invalidazione dei token email:", error);
+      throw error;
+    }
+  }
+
+  async storePasswordResetToken(userId: string, tokenHash: string, expiresAt: Date): Promise<void> {
+    const client = await databaseService.getPool().connect();
+
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `
+          UPDATE password_reset_tokens
+          SET consumed_at = CURRENT_TIMESTAMP
+          WHERE user_id = $1 AND consumed_at IS NULL
+        `,
+        [userId],
+      );
+      await client.query(
+        `
+          INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+          VALUES ($1, $2, $3)
+        `,
+        [userId, tokenHash, expiresAt],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Errore nel salvataggio del token reset password:", error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async consumePasswordResetToken(tokenHash: string): Promise<string | null> {
+    const query = `
+      UPDATE password_reset_tokens
+      SET consumed_at = CURRENT_TIMESTAMP
+      WHERE token_hash = $1
+        AND consumed_at IS NULL
+        AND expires_at > CURRENT_TIMESTAMP
+      RETURNING user_id
+    `;
+
+    try {
+      const result = await databaseService.getPool().query(query, [tokenHash]);
+      return result.rows[0]?.user_id || null;
+    } catch (error) {
+      console.error("Errore nel consumo del token reset password:", error);
+      throw error;
+    }
+  }
+
+  async invalidatePasswordResetTokens(userId: string): Promise<void> {
+    try {
+      await databaseService.getPool().query(
+        `
+          UPDATE password_reset_tokens
+          SET consumed_at = CURRENT_TIMESTAMP
+          WHERE user_id = $1 AND consumed_at IS NULL
+        `,
+        [userId],
+      );
+    } catch (error) {
+      console.error("Errore nell'invalidazione dei token reset password:", error);
       throw error;
     }
   }

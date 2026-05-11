@@ -18,6 +18,7 @@ export interface LoyaltyCardWithBar {
   barName: string;
   merchantName: string;
   piva: string;
+  phone: string | null;
   coverImage: string | null;
   address: string | null;
   latitude: number | null;
@@ -111,6 +112,7 @@ export class LoyaltyCardRepository {
           b.name AS bar_name,
           b.merchant_name,
           b.iva AS piva,
+          b.phone,
           b.image AS cover_image,
           b.address,
           ${geoSelect},
@@ -140,6 +142,7 @@ export class LoyaltyCardRepository {
         barName: row.bar_name,
         merchantName: row.merchant_name,
         piva: row.piva,
+        phone: row.phone,
         coverImage: row.cover_image,
         address: row.address,
         latitude: row.latitude,

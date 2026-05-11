@@ -86,6 +86,18 @@ async function createServer() {
     app.post("/api/auth/login", async (request, reply) => {
         return authController.login(request, reply);
     });
+    app.post("/api/auth/verify-email/resend", async (request, reply) => {
+        return authController.resendEmailVerification(request, reply);
+    });
+    app.post("/api/auth/verify-email/confirm", async (request, reply) => {
+        return authController.verifyEmail(request, reply);
+    });
+    app.post("/api/auth/password-reset/request", async (request, reply) => {
+        return authController.requestPasswordReset(request, reply);
+    });
+    app.post("/api/auth/password-reset/confirm", async (request, reply) => {
+        return authController.confirmPasswordReset(request, reply);
+    });
     // User logout endpoint
     app.post("/api/auth/logout", { onRequest: [authenticateToken] }, async (request, reply) => {
         return authController.logout(request, reply);

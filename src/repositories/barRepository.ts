@@ -80,6 +80,12 @@ export interface BarDashboardStats {
     totalReceipts: number;
     totalPointsIssued: number;
     avgReceiptsPerCustomer: number;
+    totalApprovedAmount: number;
+    averageTicket: number;
+    averagePointsPerRequest: number;
+    pendingRequests: number;
+    rejectedRequests: number;
+    approvalRate: number;
   };
   activities: BarActivityItem[];
 }
@@ -244,6 +250,7 @@ export class BarRepository {
     name: string;
     merchant_name: string;
     address: string;
+    phone: string | null;
     image: string | null;
     logo: string | null;
     latitude: number | null;
@@ -262,6 +269,7 @@ export class BarRepository {
           merchant_name,
           name,
           address,
+          phone,
           image,
           logo,
           ${includeGeoColumns ? "latitude" : "NULL::double precision AS latitude"},
@@ -539,6 +547,20 @@ export class BarRepository {
               COUNT(DISTINCT cr.requester_user_id) FILTER (WHERE cr.status = 'approved') AS customers_with_receipts,
               COUNT(cr.id) FILTER (WHERE cr.status = 'approved') AS total_receipts,
               COALESCE(SUM(cr.points_preview) FILTER (WHERE cr.status = 'approved'), 0) AS total_points_issued,
+              COALESCE(SUM(cr.amount) FILTER (WHERE cr.status = 'approved'), 0) AS total_approved_amount,
+              COALESCE(ROUND(AVG(cr.amount) FILTER (WHERE cr.status = 'approved'), 2), 0) AS average_ticket,
+              COALESCE(ROUND(AVG(cr.points_preview) FILTER (WHERE cr.status = 'approved'), 1), 0) AS average_points_per_request,
+              COUNT(cr.id) FILTER (WHERE cr.status = 'pending') AS pending_requests,
+              COUNT(cr.id) FILTER (WHERE cr.status = 'rejected') AS rejected_requests,
+              COALESCE(
+                ROUND(
+                  (
+                    COUNT(cr.id) FILTER (WHERE cr.status = 'approved')::numeric * 100
+                  ) / NULLIF(COUNT(cr.id) FILTER (WHERE cr.status IN ('approved', 'rejected')), 0),
+                  1
+                ),
+                0
+              ) AS approval_rate,
               COALESCE(
                 ROUND(
                   COUNT(cr.id) FILTER (WHERE cr.status = 'approved')::numeric
@@ -583,6 +605,12 @@ export class BarRepository {
           totalReceipts: Number(summary.total_receipts) || 0,
           totalPointsIssued: Number(summary.total_points_issued) || 0,
           avgReceiptsPerCustomer: Number(summary.avg_receipts_per_customer) || 0,
+          totalApprovedAmount: Number(summary.total_approved_amount) || 0,
+          averageTicket: Number(summary.average_ticket) || 0,
+          averagePointsPerRequest: Number(summary.average_points_per_request) || 0,
+          pendingRequests: Number(summary.pending_requests) || 0,
+          rejectedRequests: Number(summary.rejected_requests) || 0,
+          approvalRate: Number(summary.approval_rate) || 0,
         },
         activities: activitiesResult.rows.map((row: any) => ({
           id: row.id,

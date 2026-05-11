@@ -1,21 +1,78 @@
+import { createHash, randomBytes } from "crypto";
 import { FastifyRequest, FastifyReply } from "fastify";
 import { getAuthService } from "../services/authService.js";
 import { userRepository } from "../repositories/userRepository.js";
+import { emailService } from "../services/emailService.js";
 import { saveAndOptimizeImage, isImageFile, isFileSizeValid } from "../utils/imageUpload.js";
 import {
+  validateEmailRequestInput,
+  validateVerifyEmailInput,
+  validateResetPasswordConfirmInput,
   validateRegisterInput,
   validateLoginInput,
   validateRefreshInput,
+  type EmailRequestInput,
+  type VerifyEmailInput,
+  type ResetPasswordConfirmInput,
   type RegisterInput,
   type LoginInput,
   type RefreshInput,
 } from "../validators/authValidator.js";
+
+const DEFAULT_EMAIL_VERIFICATION_TTL_HOURS = 24;
+const DEFAULT_PASSWORD_RESET_TTL_MINUTES = 30;
+
+function getEmailVerificationTtlHours() {
+  const parsed = Number.parseInt(process.env.EMAIL_VERIFICATION_TTL_HOURS || "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EMAIL_VERIFICATION_TTL_HOURS;
+}
+
+function getPasswordResetTtlMinutes() {
+  const parsed = Number.parseInt(process.env.PASSWORD_RESET_TTL_MINUTES || "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PASSWORD_RESET_TTL_MINUTES;
+}
+
+function createRawToken() {
+  return randomBytes(24).toString("hex");
+}
+
+function hashRawToken(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
 
 /**
  * Auth Controller
  * Gestisce la logica di registrazione, login e operazioni correlate
  */
 export class AuthController {
+  private async issueEmailVerification(user: { id: string; email: string; name: string | null }) {
+    const rawToken = createRawToken();
+    const ttlHours = getEmailVerificationTtlHours();
+    const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+
+    await userRepository.storeEmailVerificationToken(user.id, hashRawToken(rawToken), expiresAt);
+    return emailService.sendEmailVerificationEmail({
+      recipientEmail: user.email,
+      recipientName: user.name,
+      verificationToken: rawToken,
+      expiresInHours: ttlHours,
+    });
+  }
+
+  private async issuePasswordReset(user: { id: string; email: string; name: string | null }) {
+    const rawToken = createRawToken();
+    const ttlMinutes = getPasswordResetTtlMinutes();
+    const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+
+    await userRepository.storePasswordResetToken(user.id, hashRawToken(rawToken), expiresAt);
+    return emailService.sendPasswordResetEmail({
+      recipientEmail: user.email,
+      recipientName: user.name,
+      resetToken: rawToken,
+      expiresInMinutes: ttlMinutes,
+    });
+  }
+
   /**
    * Handler per la registrazione utente
    */
@@ -58,17 +115,25 @@ export class AuthController {
         email: input.email,
         password: hashedPassword,
       });
+      const createdUser = await userRepository.findById(userId);
+      const verificationDispatch = await this.issueEmailVerification({
+        id: userId,
+        email: input.email,
+        name: input.name,
+      });
 
       console.log(`✅ Utente registrato con successo: ${input.email}`);
 
       return reply.status(201).send({
         success: true,
-        message: "Utente registrato con successo",
+        message: "Utente registrato. Verifica la tua email per completare l'accesso",
         data: {
           id: userId,
           email: input.email,
           name: input.name,
-          publicId: (await userRepository.findById(userId))?.public_id ?? null,
+          publicId: createdUser?.public_id ?? null,
+          requiresEmailVerification: true,
+          verificationEmailSent: verificationDispatch.sent,
         },
       });
     } catch (error) {
@@ -130,6 +195,17 @@ export class AuthController {
           success: false,
           error: "Credenziali non valide",
           code: "INVALID_CREDENTIALS",
+        });
+      }
+
+      if (!user.is_email_verified) {
+        return reply.status(403).send({
+          success: false,
+          error: "Verifica la tua email prima di accedere",
+          code: "EMAIL_NOT_VERIFIED",
+          data: {
+            email: user.email,
+          },
         });
       }
 
@@ -292,6 +368,138 @@ export class AuthController {
         error: "Errore durante il logout",
         code: "LOGOUT_ERROR",
       });
+    }
+  }
+
+  async resendEmailVerification(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const validation = validateEmailRequestInput(request.body as unknown);
+      if (!validation.success) {
+        return reply.status(400).send({
+          success: false,
+          error: "Dati di input non validi",
+          code: "VALIDATION_ERROR",
+          details: validation.errors,
+        });
+      }
+
+      const input = validation.data as EmailRequestInput;
+      const user = await userRepository.findByEmail(input.email);
+      if (user && !user.is_email_verified) {
+        await this.issueEmailVerification({ id: user.id, email: user.email, name: user.name });
+      }
+
+      return reply.status(200).send({
+        success: true,
+        message: "Se l'account esiste e non è verificato, abbiamo inviato una nuova email di verifica",
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "EMAIL_VERIFICATION_RESEND_ERROR" });
+    }
+  }
+
+  async verifyEmail(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const validation = validateVerifyEmailInput(request.body as unknown);
+      if (!validation.success) {
+        return reply.status(400).send({
+          success: false,
+          error: "Dati di input non validi",
+          code: "VALIDATION_ERROR",
+          details: validation.errors,
+        });
+      }
+
+      const input = validation.data as VerifyEmailInput;
+      const userId = await userRepository.consumeEmailVerificationToken(hashRawToken(input.token));
+      if (!userId) {
+        return reply.status(400).send({
+          success: false,
+          error: "Codice di verifica non valido o scaduto",
+          code: "INVALID_EMAIL_VERIFICATION_TOKEN",
+        });
+      }
+
+      await userRepository.updateUser(userId, {
+        is_email_verified: true,
+        email_verified_at: new Date(),
+      });
+      await userRepository.invalidateEmailVerificationTokens(userId);
+
+      return reply.status(200).send({
+        success: true,
+        message: "Email verificata con successo",
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "EMAIL_VERIFICATION_ERROR" });
+    }
+  }
+
+  async requestPasswordReset(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const validation = validateEmailRequestInput(request.body as unknown);
+      if (!validation.success) {
+        return reply.status(400).send({
+          success: false,
+          error: "Dati di input non validi",
+          code: "VALIDATION_ERROR",
+          details: validation.errors,
+        });
+      }
+
+      const input = validation.data as EmailRequestInput;
+      const user = await userRepository.findByEmail(input.email);
+      if (user) {
+        await this.issuePasswordReset({ id: user.id, email: user.email, name: user.name });
+      }
+
+      return reply.status(200).send({
+        success: true,
+        message: "Se l'account esiste, abbiamo inviato un codice per reimpostare la password",
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "PASSWORD_RESET_REQUEST_ERROR" });
+    }
+  }
+
+  async confirmPasswordReset(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const validation = validateResetPasswordConfirmInput(request.body as unknown);
+      if (!validation.success) {
+        return reply.status(400).send({
+          success: false,
+          error: "Dati di input non validi",
+          code: "VALIDATION_ERROR",
+          details: validation.errors,
+        });
+      }
+
+      const input = validation.data as ResetPasswordConfirmInput;
+      const userId = await userRepository.consumePasswordResetToken(hashRawToken(input.token));
+      if (!userId) {
+        return reply.status(400).send({
+          success: false,
+          error: "Codice reset non valido o scaduto",
+          code: "INVALID_PASSWORD_RESET_TOKEN",
+        });
+      }
+
+      const authService = getAuthService();
+      const hashedPassword = await authService.hashPassword(input.password);
+      await userRepository.updateUser(userId, { password: hashedPassword });
+      await userRepository.invalidatePasswordResetTokens(userId);
+      await userRepository.revokeAllUserTokens(userId);
+
+      return reply.status(200).send({
+        success: true,
+        message: "Password aggiornata con successo",
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "PASSWORD_RESET_CONFIRM_ERROR" });
     }
   }
 

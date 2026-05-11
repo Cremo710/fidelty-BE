@@ -43,7 +43,33 @@ export class DatabaseService {
 
       ALTER TABLE utenti ADD COLUMN IF NOT EXISTS public_id VARCHAR(8) UNIQUE;
       ALTER TABLE utenti ADD COLUMN IF NOT EXISTS profile_image TEXT;
+      ALTER TABLE utenti ADD COLUMN IF NOT EXISTS is_email_verified BOOLEAN DEFAULT FALSE;
+      ALTER TABLE utenti ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP;
       CREATE INDEX IF NOT EXISTS idx_utenti_public_id ON utenti(public_id);
+
+      CREATE TABLE IF NOT EXISTS email_verification_tokens (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        token_hash TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        consumed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user_id ON email_verification_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_hash ON email_verification_tokens(token_hash);
+
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
+        token_hash TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
+        consumed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash ON password_reset_tokens(token_hash);
 
       -- Tabella per il refresh token (per future implementazioni)
       CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -367,7 +393,11 @@ export class DatabaseService {
     barName: string;
     merchantName: string;
     piva: string;
+    phone: string | null;
     coverImage: string | null;
+    address: string | null;
+    latitude: number | null;
+    longitude: number | null;
     totalPoints: number;
     frozenPoints: number;
     availablePoints: number;
@@ -384,7 +414,11 @@ export class DatabaseService {
         barName: card.barName,
         merchantName: card.merchantName,
         piva: card.piva,
+        phone: card.phone,
         coverImage: card.coverImage,
+        address: card.address,
+        latitude: card.latitude,
+        longitude: card.longitude,
         totalPoints: card.totalPoints,
         frozenPoints: card.frozenPoints,
         availablePoints: card.availablePoints,

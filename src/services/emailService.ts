@@ -11,6 +11,20 @@ type BusinessDecisionEmailInput = {
   rejectionReason?: string | null;
 };
 
+type EmailVerificationInput = {
+  recipientEmail: string;
+  recipientName?: string | null;
+  verificationToken: string;
+  expiresInHours: number;
+};
+
+type PasswordResetEmailInput = {
+  recipientEmail: string;
+  recipientName?: string | null;
+  resetToken: string;
+  expiresInMinutes: number;
+};
+
 export type EmailSendResult = {
   sent: boolean;
   skippedReason?: string;
@@ -178,6 +192,72 @@ class EmailService {
     return { subject, html, text };
   }
 
+  private buildEmailVerificationTemplate(input: EmailVerificationInput) {
+    const recipientName = input.recipientName ? escapeHtml(input.recipientName) : "ciao";
+    const safeToken = escapeHtml(input.verificationToken);
+    const subject = "Verifica la tua email su Fidelty";
+    const html = `
+      <div style="margin:0;padding:32px;background:#f5f2fb;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1f1730;">
+        <div style="max-width:680px;margin:0 auto;background:#ffffff;border-radius:28px;overflow:hidden;box-shadow:0 18px 48px rgba(44,28,84,0.08);">
+          <div style="padding:28px 32px;background:linear-gradient(135deg,#8a63df 0%,#5fa2ff 100%);color:#fff;">
+            <div style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;opacity:0.82;font-weight:700;">Fidelty</div>
+            <h1 style="margin:14px 0 0;font-size:30px;line-height:1.1;">Conferma la tua email</h1>
+            <p style="margin:12px 0 0;font-size:15px;line-height:1.6;opacity:0.92;">Completa la registrazione inserendo questo codice nell'app.</p>
+          </div>
+          <div style="padding:32px;">
+            <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">${recipientName}, usa questo codice per verificare il tuo account Fidelty:</p>
+            <div style="font-size:28px;font-weight:800;letter-spacing:0.12em;padding:18px 22px;border-radius:18px;background:#f7f4ff;border:1px solid rgba(113,87,186,0.16);display:inline-block;margin-bottom:22px;">${safeToken}</div>
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.7;color:#5d556e;">Il codice scade tra ${input.expiresInHours} ore.</p>
+            <p style="margin:0;font-size:14px;line-height:1.7;color:#807791;">Se non hai richiesto la registrazione, puoi ignorare questa email.</p>
+          </div>
+        </div>
+      </div>
+    `;
+    const text = [
+      `Ciao ${input.recipientName || ""},`,
+      "",
+      "usa questo codice per verificare il tuo account Fidelty:",
+      input.verificationToken,
+      "",
+      `Il codice scade tra ${input.expiresInHours} ore.`,
+    ].join("\n");
+
+    return { subject, html, text };
+  }
+
+  private buildPasswordResetTemplate(input: PasswordResetEmailInput) {
+    const recipientName = input.recipientName ? escapeHtml(input.recipientName) : "ciao";
+    const safeToken = escapeHtml(input.resetToken);
+    const subject = "Reset password Fidelty";
+    const html = `
+      <div style="margin:0;padding:32px;background:#f5f2fb;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1f1730;">
+        <div style="max-width:680px;margin:0 auto;background:#ffffff;border-radius:28px;overflow:hidden;box-shadow:0 18px 48px rgba(44,28,84,0.08);">
+          <div style="padding:28px 32px;background:linear-gradient(135deg,#4c9a77 0%,#3a7bd5 100%);color:#fff;">
+            <div style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;opacity:0.82;font-weight:700;">Fidelty</div>
+            <h1 style="margin:14px 0 0;font-size:30px;line-height:1.1;">Reimposta la password</h1>
+            <p style="margin:12px 0 0;font-size:15px;line-height:1.6;opacity:0.92;">Inserisci questo codice nell'app per scegliere una nuova password.</p>
+          </div>
+          <div style="padding:32px;">
+            <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">${recipientName}, usa questo codice per completare il reset password:</p>
+            <div style="font-size:28px;font-weight:800;letter-spacing:0.12em;padding:18px 22px;border-radius:18px;background:#f4fbf7;border:1px solid rgba(76,154,119,0.18);display:inline-block;margin-bottom:22px;">${safeToken}</div>
+            <p style="margin:0 0 12px;font-size:15px;line-height:1.7;color:#5d556e;">Il codice scade tra ${input.expiresInMinutes} minuti.</p>
+            <p style="margin:0;font-size:14px;line-height:1.7;color:#807791;">Se non hai richiesto il reset, ignora questa email e mantieni la tua password attuale.</p>
+          </div>
+        </div>
+      </div>
+    `;
+    const text = [
+      `Ciao ${input.recipientName || ""},`,
+      "",
+      "usa questo codice per reimpostare la password Fidelty:",
+      input.resetToken,
+      "",
+      `Il codice scade tra ${input.expiresInMinutes} minuti.`,
+    ].join("\n");
+
+    return { subject, html, text };
+  }
+
   async sendBusinessRequestDecisionEmail(input: BusinessDecisionEmailInput): Promise<EmailSendResult> {
     const transporter = this.getTransporter();
     if (!transporter) {
@@ -202,6 +282,60 @@ class EmailService {
     });
 
     console.log(`📧 Email esito business request inviata a ${input.recipientEmail}`);
+    return {
+      sent: true,
+      recipient: input.recipientEmail,
+    };
+  }
+
+  async sendEmailVerificationEmail(input: EmailVerificationInput): Promise<EmailSendResult> {
+    const transporter = this.getTransporter();
+    if (!transporter) {
+      return {
+        sent: false,
+        skippedReason: "email_not_configured",
+        recipient: input.recipientEmail,
+      };
+    }
+
+    const { fromEmail, fromName } = this.getConfig();
+    const template = this.buildEmailVerificationTemplate(input);
+
+    await transporter.sendMail({
+      from: `${fromName} <${fromEmail}>`,
+      to: input.recipientEmail,
+      subject: template.subject,
+      html: template.html,
+      text: template.text,
+    });
+
+    return {
+      sent: true,
+      recipient: input.recipientEmail,
+    };
+  }
+
+  async sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<EmailSendResult> {
+    const transporter = this.getTransporter();
+    if (!transporter) {
+      return {
+        sent: false,
+        skippedReason: "email_not_configured",
+        recipient: input.recipientEmail,
+      };
+    }
+
+    const { fromEmail, fromName } = this.getConfig();
+    const template = this.buildPasswordResetTemplate(input);
+
+    await transporter.sendMail({
+      from: `${fromName} <${fromEmail}>`,
+      to: input.recipientEmail,
+      subject: template.subject,
+      html: template.html,
+      text: template.text,
+    });
+
     return {
       sent: true,
       recipient: input.recipientEmail,

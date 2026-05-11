@@ -7,6 +7,24 @@ import { consumptionNotificationService } from "../services/consumptionNotificat
 
 const QR_PREFIX = "FIDELTY_BAR:";
 const POINTS_PER_EURO = 100;
+const DEFAULT_MAX_DISTANCE_METERS = 250;
+
+const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+const getDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const earthRadiusMeters = 6371000;
+  const deltaLat = toRadians(lat2 - lat1);
+  const deltaLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(deltaLon / 2) ** 2;
+
+  return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const getConsumptionRequestMaxDistanceMeters = () => {
+  const rawValue = Number.parseInt(process.env.CONSUMPTION_REQUEST_MAX_DISTANCE_METERS || "", 10);
+  return Number.isFinite(rawValue) && rawValue > 0 ? rawValue : DEFAULT_MAX_DISTANCE_METERS;
+};
 
 type RequesterActivityItem = {
   id: string;
@@ -238,6 +256,8 @@ export class ConsumptionRequestController {
           name: bar.name,
           businessName: bar.merchant_name,
           address: bar.address,
+          latitude: bar.latitude,
+          longitude: bar.longitude,
           image: bar.image,
           logo: bar.logo,
         },
@@ -259,9 +279,20 @@ export class ConsumptionRequestController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const body = (request.body as { qrCodeValue?: string; amount?: number | string } | undefined) || {};
+      const body = (request.body as {
+        qrCodeValue?: string;
+        amount?: number | string;
+        userLatitude?: number | string;
+        userLongitude?: number | string;
+      } | undefined) || {};
       const vatNumber = parseBarQrValue(body.qrCodeValue || "");
       const amount = typeof body.amount === "number" ? body.amount : Number.parseFloat(String(body.amount || ""));
+      const userLatitude = typeof body.userLatitude === "number"
+        ? body.userLatitude
+        : Number.parseFloat(String(body.userLatitude || ""));
+      const userLongitude = typeof body.userLongitude === "number"
+        ? body.userLongitude
+        : Number.parseFloat(String(body.userLongitude || ""));
 
       if (!vatNumber) {
         return reply.status(400).send({ success: false, error: "Codice QR non valido", code: "INVALID_QR_CODE" });
@@ -274,6 +305,38 @@ export class ConsumptionRequestController {
       const bar = await barRepository.findByPiva(vatNumber);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      const barLatitude = bar.latitude !== null ? Number(bar.latitude) : NaN;
+      const barLongitude = bar.longitude !== null ? Number(bar.longitude) : NaN;
+      if (!Number.isFinite(barLatitude) || !Number.isFinite(barLongitude)) {
+        return reply.status(400).send({
+          success: false,
+          error: "Questo bar non ha una posizione valida configurata",
+          code: "BAR_LOCATION_UNAVAILABLE",
+        });
+      }
+
+      if (!Number.isFinite(userLatitude) || !Number.isFinite(userLongitude)) {
+        return reply.status(400).send({
+          success: false,
+          error: "Posizione utente mancante o non valida",
+          code: "USER_LOCATION_REQUIRED",
+        });
+      }
+
+      const maxDistanceMeters = getConsumptionRequestMaxDistanceMeters();
+      const distanceMeters = getDistanceMeters(userLatitude, userLongitude, barLatitude, barLongitude);
+      if (distanceMeters > maxDistanceMeters) {
+        return reply.status(403).send({
+          success: false,
+          error: "Devi essere vicino al bar per inviare la richiesta di consumazione",
+          code: "USER_TOO_FAR_FROM_BAR",
+          data: {
+            distanceMeters: Math.round(distanceMeters),
+            maxDistanceMeters,
+          },
+        });
       }
 
       if (bar.user_id === userId) {
