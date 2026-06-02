@@ -35,6 +35,20 @@ const CONFIG: ServerConfig = {
   nodeEnv: (process.env.NODE_ENV as ServerConfig["nodeEnv"]) || "development",
 };
 
+function getAllowedCorsOrigins(): RegExp[] {
+  const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+    .map((origin) => new RegExp(`^${origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+
+  return [
+    /^https?:\/\/localhost(:\d+)?$/,
+    /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+    ...configuredOrigins,
+  ];
+}
+
 // Create Fastify server
 async function createServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -62,13 +76,7 @@ async function createServer(): Promise<FastifyInstance> {
         return cb(null, true);
       }
 
-      // Add your production domains here
-      const allowedOrigins = [
-        /^https?:\/\/localhost(:\d+)?$/, // Localhost with any port
-        /^https?:\/\/127\.0\.0\.1(:\d+)?$/, // 127.0.0.1 with any port
-        // Add your production domain here, e.g.:
-        // /^https?:\/\/yourdomain\.com$/,
-      ].map((re) => new RegExp(re));
+      const allowedOrigins = getAllowedCorsOrigins();
 
       if (allowedOrigins.some((re) => re.test(origin))) {
         return cb(null, true);
