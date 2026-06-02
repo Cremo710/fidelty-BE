@@ -4,6 +4,7 @@ import { consumptionRequestRepository, type ConsumptionRequestDTO, type Consumpt
 import { offerRedemptionRepository } from "../repositories/offerRedemptionRepository.js";
 import { userRepository } from "../repositories/userRepository.js";
 import { consumptionNotificationService } from "../services/consumptionNotificationService.js";
+import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
 
 const QR_PREFIX = "FIDELTY_BAR:";
 const POINTS_PER_EURO = 100;
@@ -407,7 +408,7 @@ export class ConsumptionRequestController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -447,7 +448,7 @@ export class ConsumptionRequestController {
         });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }

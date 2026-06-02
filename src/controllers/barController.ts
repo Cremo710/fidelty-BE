@@ -11,6 +11,7 @@ import { offerRepository } from "../repositories/offerRepository.js";
 import { openingHoursRepository } from "../repositories/openingHoursRepository.js";
 import { validateCreateOfferInput } from "../validators/offerValidator.js";
 import { validateSetOpeningHoursInput } from "../validators/openingHoursValidator.js";
+import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
 
 /**
  * Interfaccia per la risposta di Google Geocoding
@@ -59,6 +60,29 @@ export class BarController {
       console.warn("⚠️ Geocoding fallito per indirizzo bar:", error);
       return null;
     }
+  }
+
+  private serializeBar(bar: any) {
+    return {
+      id: bar.id,
+      piva: bar.iva,
+      barName: bar.name,
+      businessName: bar.merchant_name,
+      address: bar.address,
+      coverImage: bar.image,
+      logo: bar.logo,
+      contactEmail: bar.contact_email,
+      phone: bar.phone,
+      instagram: bar.instagram,
+      facebook: bar.facebook,
+      tiktok: bar.tiktok,
+      website: bar.website,
+      cardBackgroundImage: bar.card_background_image,
+      cardColor: bar.card_color,
+      cardUseCover: bar.card_use_cover,
+      createdAt: bar.created_at,
+      updatedAt: bar.updated_at,
+    };
   }
 
   /**
@@ -176,16 +200,6 @@ export class BarController {
           success: false,
           error: "Partita IVA già registrata",
           code: "PIVA_EXISTS",
-        });
-      }
-
-      // Verifica se l'utente ha già un bar registrato
-      const userBar = await barRepository.findByUserId(userId);
-      if (userBar) {
-        return reply.status(409).send({
-          success: false,
-          error: "Utente ha già un bar registrato",
-          code: "BAR_ALREADY_EXISTS",
         });
       }
 
@@ -313,7 +327,7 @@ export class BarController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -436,33 +450,33 @@ export class BarController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, message: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
 
       return reply.status(200).send({
         success: true,
-        data: {
-          id: bar.id,
-          piva: bar.iva,
-          barName: bar.name,
-          businessName: bar.merchant_name,
-          address: bar.address,
-          coverImage: bar.image,
-          logo: bar.logo,
-          contactEmail: bar.contact_email,
-          phone: bar.phone,
-          instagram: bar.instagram,
-          facebook: bar.facebook,
-          tiktok: bar.tiktok,
-          website: bar.website,
-          cardBackgroundImage: bar.card_background_image,
-          cardColor: bar.card_color,
-          cardUseCover: bar.card_use_cover,
-          createdAt: bar.created_at,
-          updatedAt: bar.updated_at,
-        },
+        data: this.serializeBar(bar),
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "RETRIEVAL_ERROR" });
+    }
+  }
+
+  async listOwnedBars(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const bars = await barRepository.findAllByUserId(userId);
+
+      return reply.status(200).send({
+        success: true,
+        data: bars.map((bar) => this.serializeBar(bar)),
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
@@ -477,7 +491,7 @@ export class BarController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -505,7 +519,7 @@ export class BarController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -613,30 +627,11 @@ export class BarController {
       await barRepository.updateBar(bar.id, updates);
 
       // Return updated bar data
-      const updatedBar = await barRepository.findByUserId(userId);
+      const updatedBar = await barRepository.findById(bar.id);
       return reply.status(200).send({
         success: true,
         message: "Profilo bar aggiornato",
-        data: {
-          id: updatedBar!.id,
-          piva: updatedBar!.iva,
-          barName: updatedBar!.name,
-          businessName: updatedBar!.merchant_name,
-          address: updatedBar!.address,
-          coverImage: updatedBar!.image,
-          logo: updatedBar!.logo,
-          contactEmail: updatedBar!.contact_email,
-          phone: updatedBar!.phone,
-          instagram: updatedBar!.instagram,
-          facebook: updatedBar!.facebook,
-          tiktok: updatedBar!.tiktok,
-          website: updatedBar!.website,
-          cardBackgroundImage: updatedBar!.card_background_image,
-          cardColor: updatedBar!.card_color,
-          cardUseCover: updatedBar!.card_use_cover,
-          createdAt: updatedBar!.created_at,
-          updatedAt: updatedBar!.updated_at,
-        },
+        data: this.serializeBar(updatedBar),
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
@@ -655,7 +650,7 @@ export class BarController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -890,11 +885,6 @@ export class BarController {
       if (existingBar) {
         return reply.status(409).send({ success: false, error: "Partita IVA già registrata", code: "PIVA_EXISTS" });
       }
-      const userBar = await barRepository.findByUserId(userId);
-      if (userBar) {
-        return reply.status(409).send({ success: false, error: "Utente ha già un bar registrato", code: "BAR_ALREADY_EXISTS" });
-      }
-
       // --- Upload immagini su Cloudinary ---
       let coverUrl: string;
       try {

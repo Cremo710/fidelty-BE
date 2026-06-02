@@ -174,6 +174,10 @@ async function createServer(): Promise<FastifyInstance> {
     return barController.getBarByUser(request, reply);
   });
 
+  app.get("/api/bar/profiles", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barController.listOwnedBars(request, reply);
+  });
+
   app.get("/api/bar/dashboard-stats", { onRequest: [authenticateToken] }, async (request, reply) => {
     return barController.getDashboardStats(request, reply);
   });

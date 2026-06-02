@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { barRepository } from "../repositories/barRepository.js";
 import { openingHoursRepository } from "../repositories/openingHoursRepository.js";
+import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
 import { validateSetOpeningHoursInput } from "../validators/openingHoursValidator.js";
 
 export class OpeningHoursController {
@@ -14,7 +15,7 @@ export class OpeningHoursController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -51,7 +52,7 @@ export class OpeningHoursController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }

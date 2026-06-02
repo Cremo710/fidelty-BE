@@ -217,11 +217,22 @@ export class BarRepository {
    */
   async findByUserId(userId: string): Promise<BarDTO | null> {
     try {
-      const query = "SELECT * FROM bars WHERE user_id = $1";
+      const query = "SELECT * FROM bars WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1";
       const result = await databaseService.getPool().query(query, [userId]);
       return result.rows[0] || null;
     } catch (error) {
       console.error("❌ Errore durante il recupero del bar per user_id:", error);
+      throw error;
+    }
+  }
+
+  async findAllByUserId(userId: string): Promise<BarDTO[]> {
+    try {
+      const query = "SELECT * FROM bars WHERE user_id = $1 ORDER BY created_at DESC, id DESC";
+      const result = await databaseService.getPool().query(query, [userId]);
+      return result.rows || [];
+    } catch (error) {
+      console.error("❌ Errore durante il recupero dei bar per user_id:", error);
       throw error;
     }
   }

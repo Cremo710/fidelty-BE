@@ -55,16 +55,6 @@ export class BusinessRequestController {
         return reply.status(401).send({ success: false, error: "Non autenticato" });
       }
 
-      // Controlla se l'utente ha già un bar
-      const existingBar = await barRepository.findByUserId(userId);
-      if (existingBar) {
-        return reply.status(400).send({
-          success: false,
-          error: "Hai già un bar registrato",
-          code: "BAR_EXISTS",
-        });
-      }
-
       // Controlla se ha già una richiesta pending
       const hasPending = await businessRequestRepository.hasPendingRequest(userId);
       if (hasPending) {
@@ -428,14 +418,6 @@ export class BusinessRequestController {
       const recipientName = user?.name || null;
 
       if (normalizedStatus === "CONFIRMED") {
-        const existingBar = await barRepository.findByUserId(existing.user_id);
-        if (existingBar) {
-          return reply.status(400).send({
-            success: false,
-            error: "L'utente ha già un bar registrato",
-          });
-        }
-
         const pivaExists = await barRepository.findByPiva(existing.vat_number);
         if (pivaExists) {
           return reply.status(400).send({

@@ -8,6 +8,7 @@ import {
 } from "../repositories/offerRedemptionRepository.js";
 import { databaseService } from "../services/databaseService.js";
 import { offerRedemptionTokenService } from "../services/offerRedemptionTokenService.js";
+import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
 
 const QR_TTL_MS = 10 * 60 * 1000;
 
@@ -276,7 +277,7 @@ export class OfferRedemptionController {
         return reply.status(400).send({ success: false, error: "QR non valido o manomesso", code: "INVALID_QR_TOKEN" });
       }
 
-      const bar = await barRepository.findByUserId(validatorUserId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }

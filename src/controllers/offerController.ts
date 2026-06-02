@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { barRepository } from "../repositories/barRepository.js";
 import { offerRepository } from "../repositories/offerRepository.js";
+import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
 import {
   validateCreateOfferInput,
   validateUpdateOfferInput,
@@ -17,7 +18,7 @@ export class OfferController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -55,7 +56,7 @@ export class OfferController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -130,7 +131,7 @@ export class OfferController {
 
       const { id } = request.params as { id: string };
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
@@ -169,7 +170,7 @@ export class OfferController {
 
       const { id } = request.params as { id: string };
 
-      const bar = await barRepository.findByUserId(userId);
+      const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
