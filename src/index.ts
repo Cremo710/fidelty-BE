@@ -15,6 +15,8 @@ import { friendsController } from "./controllers/friendsController.js";
 import { businessRequestController } from "./controllers/businessRequestController.js";
 import { consumptionRequestController } from "./controllers/consumptionRequestController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
+import { barConfigController } from "./controllers/barConfigController.js";
+import { adminController } from "./controllers/adminController.js";
 import pg from "pg";
 
 const { Client } = pg;
@@ -363,8 +365,29 @@ async function createServer(): Promise<FastifyInstance> {
     return consumptionRequestController.listPendingForBar(request, reply);
   });
 
+  // Green log: auto-credited requests for the bar's dashboard
+  app.get("/api/consumption-requests/bar/credited", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return consumptionRequestController.listCreditedForBar(request, reply);
+  });
+
   app.patch("/api/consumption-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
     return consumptionRequestController.updateStatus(request, reply);
+  });
+
+  // ==================== BAR CONFIG ENDPOINTS ====================
+
+  app.get("/api/bar/config", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barConfigController.getConfig(request, reply);
+  });
+
+  app.patch("/api/bar/config", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barConfigController.updateConfig(request, reply);
+  });
+
+  // ==================== ADMIN ENDPOINTS ====================
+
+  app.post("/api/admin/revoke-points", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return adminController.revokePoints(request, reply);
   });
 
   app.get("/api/loyalty-cards/my", { onRequest: [authenticateToken] }, async (request, reply) => {
