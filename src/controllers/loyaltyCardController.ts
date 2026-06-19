@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { databaseService } from "../services/databaseService.js";
+import { LOYALTY_TIERS, getTierIndexFromPoints } from "../utils/loyaltyTiers.js";
 
 class LoyaltyCardController {
   async listMine(request: FastifyRequest, reply: FastifyReply) {
@@ -34,7 +35,7 @@ class LoyaltyCardController {
           frozenPoints: card.frozenPoints,
           availablePoints: card.availablePoints,
           receiptsCount: card.receiptsCount,
-          status: card.totalPoints >= 500 ? "VIP" : "MEMBER",
+          status: LOYALTY_TIERS[getTierIndexFromPoints(card.totalPoints)].id,
           lastReceiptAt: card.lastReceiptAt,
         })),
       });
