@@ -75,6 +75,7 @@ export class OfferController {
           validFrom: o.valid_from,
           validUntil: o.valid_until,
           isActive: o.is_active,
+          requiredLoyaltyLevel: o.required_loyalty_level,
           createdAt: o.created_at,
         })),
       });
@@ -110,6 +111,7 @@ export class OfferController {
             validFrom: o.valid_from,
             validUntil: o.valid_until,
             isActive: o.is_active,
+            requiredLoyaltyLevel: o.required_loyalty_level,
             createdAt: o.created_at,
           })),
       });

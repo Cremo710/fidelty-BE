@@ -13,6 +13,7 @@ export interface OfferDTO {
   valid_from: Date | null;
   valid_until: Date | null;
   is_active: boolean;
+  required_loyalty_level: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -31,9 +32,10 @@ export class OfferRepository {
       const query = `
         INSERT INTO offers (
           id, bar_id, title, description, conditions,
-          points_required, icon, valid_from, valid_until, is_active, updated_at
+          points_required, icon, valid_from, valid_until, is_active,
+          required_loyalty_level, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
         RETURNING id
       `;
 
@@ -48,6 +50,7 @@ export class OfferRepository {
         data.validFrom ?? null,
         data.validUntil ?? null,
         data.isActive ?? true,
+        data.requiredLoyaltyLevel ?? 0,
       ];
 
       const result = await client.query(query, values);
@@ -127,6 +130,7 @@ export class OfferRepository {
       if (data.validFrom !== undefined) { fields.push(`valid_from = $${paramCount++}`); values.push(data.validFrom); }
       if (data.validUntil !== undefined) { fields.push(`valid_until = $${paramCount++}`); values.push(data.validUntil); }
       if (data.isActive !== undefined) { fields.push(`is_active = $${paramCount++}`); values.push(data.isActive); }
+      if (data.requiredLoyaltyLevel !== undefined) { fields.push(`required_loyalty_level = $${paramCount++}`); values.push(data.requiredLoyaltyLevel); }
 
       if (fields.length === 0) { await client.query("COMMIT"); return true; }
 

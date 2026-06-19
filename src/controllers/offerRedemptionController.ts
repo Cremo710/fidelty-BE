@@ -9,6 +9,7 @@ import {
 import { databaseService } from "../services/databaseService.js";
 import { offerRedemptionTokenService } from "../services/offerRedemptionTokenService.js";
 import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
+import { getTierIndexFromPoints } from "../utils/loyaltyTiers.js";
 
 const QR_TTL_MS = 10 * 60 * 1000;
 
@@ -152,6 +153,20 @@ export class OfferRedemptionController {
       if (!pointsSnapshot) {
         await client.query("ROLLBACK");
         return reply.status(404).send({ success: false, error: "Nessuna loyalty card disponibile per questo bar", code: "LOYALTY_CARD_NOT_FOUND" });
+      }
+
+      const requiredLevel = offer.required_loyalty_level ?? 0;
+      if (requiredLevel > 0) {
+        const userLevel = getTierIndexFromPoints(pointsSnapshot.totalPoints);
+        if (userLevel < requiredLevel) {
+          await client.query("ROLLBACK");
+          return reply.status(409).send({
+            success: false,
+            error: "Livello di fedeltà insufficiente per riscattare questa offerta",
+            code: "INSUFFICIENT_LOYALTY_LEVEL",
+            data: { currentLevel: userLevel, requiredLevel },
+          });
+        }
       }
 
       if (pointsSnapshot.availablePoints < offer.points_required) {

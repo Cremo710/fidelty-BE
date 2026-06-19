@@ -42,6 +42,13 @@ export const createOfferSchema = z.object({
     .boolean()
     .optional()
     .default(true),
+  requiredLoyaltyLevel: z
+    .number()
+    .int("Il livello deve essere un intero")
+    .min(0, "Il livello non può essere negativo")
+    .max(4, "Livello non valido")
+    .optional()
+    .default(0),
 });
 
 export const updateOfferSchema = createOfferSchema.partial();
