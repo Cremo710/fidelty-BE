@@ -5,6 +5,9 @@ import { userRepository } from "../repositories/userRepository.js";
 import { uploadDocument, uploadOptimizedImage, isDocumentFile, isFileSizeValid, isImageFile } from "../utils/imageUpload.js";
 import { databaseService } from "../services/databaseService.js";
 import { emailService } from "../services/emailService.js";
+import { getAuthService } from "../services/authService.js";
+import { issueEmailVerification } from "./authController.js";
+import { registerSchema } from "../validators/authValidator.js";
 
 interface GoogleGeocodeResponse {
   status: string;
@@ -44,9 +47,211 @@ export class BusinessRequestController {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Helpers privati
+  // ---------------------------------------------------------------------------
+
+  /** Parsifica il body multipart e restituisce campi testuali + buffer file. */
+  private async parseMultipart(request: FastifyRequest): Promise<{
+    data: Record<string, string>;
+    docBuffer: Buffer | null; docMimeType: string | null; docFileName: string | null;
+    coverBuffer: Buffer | null; coverMimeType: string | null; coverFileName: string | null;
+    logoBuffer: Buffer | null; logoMimeType: string | null; logoFileName: string | null;
+    cardBackgroundBuffer: Buffer | null; cardBackgroundMimeType: string | null; cardBackgroundFileName: string | null;
+  }> {
+    const data: Record<string, string> = {};
+    let docBuffer: Buffer | null = null, docMimeType: string | null = null, docFileName: string | null = null;
+    let coverBuffer: Buffer | null = null, coverMimeType: string | null = null, coverFileName: string | null = null;
+    let logoBuffer: Buffer | null = null, logoMimeType: string | null = null, logoFileName: string | null = null;
+    let cardBackgroundBuffer: Buffer | null = null, cardBackgroundMimeType: string | null = null, cardBackgroundFileName: string | null = null;
+
+    const parts = request.parts();
+    for await (const part of parts) {
+      if (part.type === "field") {
+        data[part.fieldname] = (part.value as string).trim();
+      } else if (part.type === "file") {
+        const chunks: Buffer[] = [];
+        for await (const chunk of part.file) {
+          chunks.push(chunk as Buffer);
+        }
+        const buffer = Buffer.concat(chunks);
+        if (part.fieldname === "document") {
+          docBuffer = buffer; docMimeType = part.mimetype; docFileName = part.filename;
+        } else if (part.fieldname === "coverImage") {
+          coverBuffer = buffer; coverMimeType = part.mimetype; coverFileName = part.filename;
+        } else if (part.fieldname === "logo") {
+          logoBuffer = buffer; logoMimeType = part.mimetype; logoFileName = part.filename;
+        } else if (part.fieldname === "cardBackgroundImage") {
+          cardBackgroundBuffer = buffer; cardBackgroundMimeType = part.mimetype; cardBackgroundFileName = part.filename;
+        }
+      }
+    }
+    return { data, docBuffer, docMimeType, docFileName, coverBuffer, coverMimeType, coverFileName, logoBuffer, logoMimeType, logoFileName, cardBackgroundBuffer, cardBackgroundMimeType, cardBackgroundFileName };
+  }
+
+  /**
+   * Valida i campi business, carica i file e persiste la business request.
+   * Restituisce la riga creata oppure null se ha già inviato una risposta di errore.
+   */
+  private async persistBusinessRequest(
+    reply: FastifyReply,
+    data: Record<string, string>,
+    files: {
+      docBuffer: Buffer | null; docMimeType: string | null; docFileName: string | null;
+      coverBuffer: Buffer | null; coverMimeType: string | null; coverFileName: string | null;
+      logoBuffer: Buffer | null; logoMimeType: string | null; logoFileName: string | null;
+      cardBackgroundBuffer: Buffer | null; cardBackgroundMimeType: string | null; cardBackgroundFileName: string | null;
+    },
+    userId: string,
+  ): Promise<any | null> {
+    const { docBuffer, docMimeType, docFileName, coverBuffer, coverMimeType, coverFileName,
+      logoBuffer, logoMimeType, logoFileName, cardBackgroundBuffer, cardBackgroundMimeType, cardBackgroundFileName } = files;
+
+    // Validazione campi obbligatori
+    if (!data.businessName || !data.barName || !data.address || !data.vatNumber) {
+      await reply.status(400).send({ success: false, error: "Ragione sociale, nome bar, indirizzo e P.IVA sono obbligatori" });
+      return null;
+    }
+
+    if (!/^\d{11}$/.test(data.vatNumber.replace(/\s/g, ""))) {
+      await reply.status(400).send({ success: false, error: "Partita IVA non valida (deve contenere 11 cifre)" });
+      return null;
+    }
+
+    if (data.contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.contactEmail)) {
+      await reply.status(400).send({ success: false, error: "Email di contatto non valida" });
+      return null;
+    }
+
+    if (data.phone && !/^[\d\s+\-()]{6,20}$/.test(data.phone)) {
+      await reply.status(400).send({ success: false, error: "Numero di telefono non valido" });
+      return null;
+    }
+
+    let offers: unknown[] = [];
+    if (data.offers) {
+      try {
+        const parsed = JSON.parse(data.offers);
+        if (!Array.isArray(parsed)) throw new Error("offers_must_be_array");
+        offers = parsed;
+      } catch {
+        await reply.status(400).send({ success: false, error: "Formato offerte non valido" });
+        return null;
+      }
+    }
+
+    let openingHours: unknown[] = [];
+    if (data.openingHours) {
+      try {
+        const parsed = JSON.parse(data.openingHours);
+        if (!Array.isArray(parsed)) throw new Error("opening_hours_must_be_array");
+        openingHours = parsed;
+      } catch {
+        await reply.status(400).send({ success: false, error: "Formato orari non valido" });
+        return null;
+      }
+    }
+
+    const validateOptionalImage = (buffer: Buffer | null, mimeType: string | null, fieldLabel: string): string | null => {
+      if (!buffer) return null;
+      if (!mimeType || !isImageFile(mimeType)) return `${fieldLabel}: formato immagine non supportato. Usa PNG, JPEG o WebP.`;
+      if (!isFileSizeValid(buffer.length, 5)) return `${fieldLabel}: file troppo grande (max 5MB)`;
+      return null;
+    };
+
+    const imageValidationError =
+      validateOptionalImage(coverBuffer, coverMimeType, "Cover") ||
+      validateOptionalImage(logoBuffer, logoMimeType, "Logo") ||
+      validateOptionalImage(cardBackgroundBuffer, cardBackgroundMimeType, "Sfondo card");
+
+    if (imageValidationError) {
+      await reply.status(400).send({ success: false, error: imageValidationError });
+      return null;
+    }
+
+    // Upload documento
+    let documentUrl: string | null = null, documentPublicId: string | null = null;
+    if (docBuffer && docMimeType && docFileName) {
+      if (!isDocumentFile(docMimeType)) {
+        await reply.status(400).send({ success: false, error: "Formato documento non supportato. Usa PNG, JPEG, WebP o PDF." });
+        return null;
+      }
+      if (!isFileSizeValid(docBuffer.length, 10)) {
+        await reply.status(400).send({ success: false, error: "Il documento è troppo grande (max 10MB)" });
+        return null;
+      }
+      const uploadResult = await uploadDocument(docBuffer, docFileName, docMimeType);
+      documentUrl = uploadResult.secure_url;
+      documentPublicId = uploadResult.public_id;
+    }
+
+    let coverImageUrl: string | null = null, coverImagePublicId: string | null = null;
+    if (coverBuffer && coverFileName) {
+      const uploadResult = await uploadOptimizedImage(coverBuffer, coverFileName, "fidelty/business_requests/cover");
+      coverImageUrl = uploadResult.secure_url;
+      coverImagePublicId = uploadResult.public_id;
+    }
+
+    let logoUrl: string | null = null, logoPublicId: string | null = null;
+    if (logoBuffer && logoFileName) {
+      const uploadResult = await uploadOptimizedImage(logoBuffer, logoFileName, "fidelty/business_requests/logo");
+      logoUrl = uploadResult.secure_url;
+      logoPublicId = uploadResult.public_id;
+    }
+
+    let cardBackgroundImageUrl: string | null = null, cardBackgroundImagePublicId: string | null = null;
+    if (cardBackgroundBuffer && cardBackgroundFileName) {
+      const uploadResult = await uploadOptimizedImage(cardBackgroundBuffer, cardBackgroundFileName, "fidelty/business_requests/card_background");
+      cardBackgroundImageUrl = uploadResult.secure_url;
+      cardBackgroundImagePublicId = uploadResult.public_id;
+    }
+
+    let latitude: number | null = null, longitude: number | null = null;
+    const geocoded = await this.geocodeAddress(data.address);
+    if (geocoded) {
+      latitude = geocoded.latitude;
+      longitude = geocoded.longitude;
+    } else {
+      const feLat = Number(data.latitude);
+      const feLng = Number(data.longitude);
+      if (Number.isFinite(feLat) && Number.isFinite(feLng)) {
+        latitude = feLat;
+        longitude = feLng;
+      }
+    }
+
+    return businessRequestRepository.create({
+      userId,
+      businessName: data.businessName,
+      barName: data.barName,
+      address: data.address,
+      vatNumber: data.vatNumber,
+      contactEmail: data.contactEmail || null,
+      phone: data.phone || null,
+      documentUrl, documentPublicId,
+      coverImageUrl, coverImagePublicId,
+      logoUrl, logoPublicId,
+      instagram: data.instagram || null,
+      facebook: data.facebook || null,
+      tiktok: data.tiktok || null,
+      website: data.website || null,
+      cardBackgroundImageUrl, cardBackgroundImagePublicId,
+      cardColor: data.cardColor || null,
+      cardUseCover: data.cardUseCover === "true" || (data.cardUseCover as any) === true,
+      offers,
+      openingHours,
+      latitude,
+      longitude,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Endpoint autenticato (app / dashboard)
+  // ---------------------------------------------------------------------------
+
   /**
    * POST /api/business-requests
-   * Crea una nuova richiesta di registrazione bar
+   * Crea una nuova richiesta di registrazione bar (utente già autenticato)
    */
   async create(request: FastifyRequest, reply: FastifyReply) {
     try {
@@ -55,258 +260,122 @@ export class BusinessRequestController {
         return reply.status(401).send({ success: false, error: "Non autenticato" });
       }
 
-      // Controlla se ha già una richiesta pending
       const hasPending = await businessRequestRepository.hasPendingRequest(userId);
       if (hasPending) {
+        return reply.status(400).send({ success: false, error: "Hai già una richiesta in attesa di approvazione", code: "REQUEST_PENDING" });
+      }
+
+      const { data, ...files } = await this.parseMultipart(request);
+      const businessRequest = await this.persistBusinessRequest(reply, data, files, userId);
+      if (!businessRequest) return;
+
+      return reply.status(201).send({ success: true, data: businessRequest });
+    } catch (error: any) {
+      console.error("❌ Errore creazione business request:", error);
+      return reply.status(500).send({ success: false, error: "Errore durante la creazione della richiesta" });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Endpoint pubblico (sito web)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * POST /api/business-requests/public
+   * Crea un account proprietario (se nuovo) e una richiesta bar, senza autenticazione.
+   */
+  async createFromSite(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      // 1. Parsifica l'intero body multipart (un'unica passata sul stream)
+      const { data, ...files } = await this.parseMultipart(request);
+
+      // 2. Valida i campi account
+      const accountName = (data.accountName || "").trim();
+      const accountEmail = (data.accountEmail || "").trim().toLowerCase();
+      const accountPassword = data.accountPassword || "";
+
+      if (!accountName) {
+        return reply.status(400).send({ success: false, error: "Il nome del titolare è obbligatorio", code: "VALIDATION_ERROR" });
+      }
+
+      // Riusa lo stesso schema password di authValidator
+      const passwordValidation = registerSchema.shape.password.safeParse(accountPassword);
+      if (!passwordValidation.success) {
         return reply.status(400).send({
           success: false,
-          error: "Hai già una richiesta in attesa di approvazione",
-          code: "REQUEST_PENDING",
+          error: passwordValidation.error.errors[0]?.message ?? "Password non valida",
+          code: "VALIDATION_ERROR",
         });
       }
 
-      // Parse multipart form data
-      const data: any = {};
-      let docBuffer: Buffer | null = null;
-      let docMimeType: string | null = null;
-      let docFileName: string | null = null;
-      let coverBuffer: Buffer | null = null;
-      let coverMimeType: string | null = null;
-      let coverFileName: string | null = null;
-      let logoBuffer: Buffer | null = null;
-      let logoMimeType: string | null = null;
-      let logoFileName: string | null = null;
-      let cardBackgroundBuffer: Buffer | null = null;
-      let cardBackgroundMimeType: string | null = null;
-      let cardBackgroundFileName: string | null = null;
-
-      const parts = request.parts();
-      for await (const part of parts) {
-        if (part.type === "field") {
-          data[part.fieldname] = (part.value as string).trim();
-        } else if (part.type === "file") {
-          const chunks: Buffer[] = [];
-          for await (const chunk of part.file) {
-            chunks.push(chunk as Buffer);
-          }
-          const buffer = Buffer.concat(chunks);
-
-          if (part.fieldname === "document") {
-            docBuffer = buffer;
-            docMimeType = part.mimetype;
-            docFileName = part.filename;
-          } else if (part.fieldname === "coverImage") {
-            coverBuffer = buffer;
-            coverMimeType = part.mimetype;
-            coverFileName = part.filename;
-          } else if (part.fieldname === "logo") {
-            logoBuffer = buffer;
-            logoMimeType = part.mimetype;
-            logoFileName = part.filename;
-          } else if (part.fieldname === "cardBackgroundImage") {
-            cardBackgroundBuffer = buffer;
-            cardBackgroundMimeType = part.mimetype;
-            cardBackgroundFileName = part.filename;
-          }
-        }
+      const emailValidation = registerSchema.shape.email.safeParse(accountEmail);
+      if (!emailValidation.success) {
+        return reply.status(400).send({ success: false, error: "Email non valida", code: "VALIDATION_ERROR" });
       }
 
-      // Validazione campi obbligatori
-      if (!data.businessName || !data.barName || !data.address || !data.vatNumber) {
-        return reply.status(400).send({
-          success: false,
-          error: "Ragione sociale, nome bar, indirizzo e P.IVA sono obbligatori",
-        });
-      }
+      // 3. Risolvi l'utente
+      let userId: string;
+      let accountCreated = false;
+      let accountAlreadyExists = false;
+      let verificationEmailSent = false;
 
-      // Validazione P.IVA
-      if (!/^\d{11}$/.test(data.vatNumber.replace(/\s/g, ""))) {
-        return reply.status(400).send({
-          success: false,
-          error: "Partita IVA non valida (deve contenere 11 cifre)",
-        });
-      }
-
-      if (data.contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.contactEmail)) {
-        return reply.status(400).send({
-          success: false,
-          error: "Email di contatto non valida",
-        });
-      }
-
-      if (data.phone && !/^[\d\s+\-()]{6,20}$/.test(data.phone)) {
-        return reply.status(400).send({
-          success: false,
-          error: "Numero di telefono non valido",
-        });
-      }
-
-      let offers: unknown[] = [];
-      if (data.offers) {
+      const exists = await userRepository.emailExists(accountEmail);
+      if (!exists) {
+        const authService = getAuthService();
+        const hashed = await authService.hashPassword(accountPassword);
+        userId = await userRepository.createUser({ name: accountName, email: accountEmail, password: hashed });
         try {
-          const parsed = JSON.parse(data.offers);
-          if (!Array.isArray(parsed)) {
-            throw new Error("offers_must_be_array");
-          }
-          offers = parsed;
-        } catch {
-          return reply.status(400).send({
-            success: false,
-            error: "Formato offerte non valido",
-          });
+          const dispatch = await issueEmailVerification({ id: userId, email: accountEmail, name: accountName });
+          verificationEmailSent = dispatch.sent ?? true;
+        } catch (emailErr) {
+          console.warn("⚠️ Email di verifica non inviata:", emailErr);
         }
-      }
-
-      let openingHours: unknown[] = [];
-      if (data.openingHours) {
-        try {
-          const parsed = JSON.parse(data.openingHours);
-          if (!Array.isArray(parsed)) {
-            throw new Error("opening_hours_must_be_array");
-          }
-          openingHours = parsed;
-        } catch {
-          return reply.status(400).send({
-            success: false,
-            error: "Formato orari non valido",
-          });
-        }
-      }
-
-      const validateOptionalImage = (buffer: Buffer | null, mimeType: string | null, fieldLabel: string) => {
-        if (!buffer) {
-          return null;
-        }
-
-        if (!mimeType || !isImageFile(mimeType)) {
-          return `${fieldLabel}: formato immagine non supportato. Usa PNG, JPEG o WebP.`;
-        }
-
-        if (!isFileSizeValid(buffer.length, 5)) {
-          return `${fieldLabel}: file troppo grande (max 5MB)`;
-        }
-
-        return null;
-      };
-
-      const imageValidationError =
-        validateOptionalImage(coverBuffer, coverMimeType, "Cover") ||
-        validateOptionalImage(logoBuffer, logoMimeType, "Logo") ||
-        validateOptionalImage(cardBackgroundBuffer, cardBackgroundMimeType, "Sfondo card");
-
-      if (imageValidationError) {
-        return reply.status(400).send({
-          success: false,
-          error: imageValidationError,
-        });
-      }
-
-      // Upload documento se presente
-      let documentUrl: string | null = null;
-      let documentPublicId: string | null = null;
-
-      if (docBuffer && docMimeType && docFileName) {
-        if (!isDocumentFile(docMimeType)) {
-          return reply.status(400).send({
-            success: false,
-            error: "Formato documento non supportato. Usa PNG, JPEG, WebP o PDF.",
-          });
-        }
-        if (!isFileSizeValid(docBuffer.length, 10)) {
-          return reply.status(400).send({
-            success: false,
-            error: "Il documento è troppo grande (max 10MB)",
-          });
-        }
-
-        const uploadResult = await uploadDocument(docBuffer, docFileName, docMimeType);
-        documentUrl = uploadResult.secure_url;
-        documentPublicId = uploadResult.public_id;
-      }
-
-      let coverImageUrl: string | null = null;
-      let coverImagePublicId: string | null = null;
-      if (coverBuffer && coverFileName) {
-        const uploadResult = await uploadOptimizedImage(coverBuffer, coverFileName, "fidelty/business_requests/cover");
-        coverImageUrl = uploadResult.secure_url;
-        coverImagePublicId = uploadResult.public_id;
-      }
-
-      let logoUrl: string | null = null;
-      let logoPublicId: string | null = null;
-      if (logoBuffer && logoFileName) {
-        const uploadResult = await uploadOptimizedImage(logoBuffer, logoFileName, "fidelty/business_requests/logo");
-        logoUrl = uploadResult.secure_url;
-        logoPublicId = uploadResult.public_id;
-      }
-
-      let cardBackgroundImageUrl: string | null = null;
-      let cardBackgroundImagePublicId: string | null = null;
-      if (cardBackgroundBuffer && cardBackgroundFileName) {
-        const uploadResult = await uploadOptimizedImage(
-          cardBackgroundBuffer,
-          cardBackgroundFileName,
-          "fidelty/business_requests/card_background"
-        );
-        cardBackgroundImageUrl = uploadResult.secure_url;
-        cardBackgroundImagePublicId = uploadResult.public_id;
-      }
-
-      let latitude: number | null = null;
-      let longitude: number | null = null;
-      const geocoded = await this.geocodeAddress(data.address);
-      if (geocoded) {
-        latitude = geocoded.latitude;
-        longitude = geocoded.longitude;
+        accountCreated = true;
       } else {
-        const feLat = Number(data.latitude);
-        const feLng = Number(data.longitude);
-        if (Number.isFinite(feLat) && Number.isFinite(feLng)) {
-          latitude = feLat;
-          longitude = feLng;
+        // Account esistente: recupera l'id senza sovrascrivere la password (anti-takeover)
+        const existing = await userRepository.findByEmail(accountEmail);
+        if (!existing) {
+          return reply.status(500).send({ success: false, error: "Errore interno durante il recupero dell'account" });
+        }
+        userId = existing.id;
+        accountAlreadyExists = true;
+      }
+
+      // 4. Guard duplicati
+      const hasPending = await businessRequestRepository.hasPendingRequest(userId);
+      if (hasPending) {
+        return reply.status(400).send({ success: false, error: "Esiste già una richiesta in attesa per questo account", code: "REQUEST_PENDING" });
+      }
+
+      // 5. Pre-check P.IVA (l'approvazione lo ricontrolla comunque)
+      if (data.vatNumber) {
+        const pivaExists = await barRepository.findByPiva(data.vatNumber.replace(/\s/g, ""));
+        if (pivaExists) {
+          return reply.status(400).send({ success: false, error: "Esiste già un bar con questa Partita IVA" });
         }
       }
 
-      const businessRequest = await businessRequestRepository.create({
-        userId,
-        businessName: data.businessName,
-        barName: data.barName,
-        address: data.address,
-        vatNumber: data.vatNumber,
-        contactEmail: data.contactEmail || null,
-        phone: data.phone || null,
-        documentUrl,
-        documentPublicId,
-        coverImageUrl,
-        coverImagePublicId,
-        logoUrl,
-        logoPublicId,
-        instagram: data.instagram || null,
-        facebook: data.facebook || null,
-        tiktok: data.tiktok || null,
-        website: data.website || null,
-        cardBackgroundImageUrl,
-        cardBackgroundImagePublicId,
-        cardColor: data.cardColor || null,
-        cardUseCover: data.cardUseCover === "true" || data.cardUseCover === true,
-        offers,
-        openingHours,
-        latitude,
-        longitude,
-      });
+      // 6. Crea la business request
+      const businessRequest = await this.persistBusinessRequest(reply, data, files, userId);
+      if (!businessRequest) return;
 
+      // 7. Risposta
       return reply.status(201).send({
         success: true,
         data: businessRequest,
+        accountCreated,
+        accountAlreadyExists,
+        verificationEmailSent,
       });
     } catch (error: any) {
-      console.error("❌ Errore creazione business request:", error);
-      return reply.status(500).send({
-        success: false,
-        error: "Errore durante la creazione della richiesta",
-      });
+      console.error("❌ Errore createFromSite:", error);
+      return reply.status(500).send({ success: false, error: "Errore durante la creazione della richiesta" });
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Endpoint admin / lettura
+  // ---------------------------------------------------------------------------
 
   /**
    * GET /api/business-requests/my

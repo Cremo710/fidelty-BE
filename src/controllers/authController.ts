@@ -45,22 +45,30 @@ function hashRawToken(token: string) {
 }
 
 /**
+ * Emette un'email di verifica per l'utente specificato.
+ * Funzione pubblica riutilizzabile da altri controller.
+ */
+export async function issueEmailVerification(user: { id: string; email: string; name: string | null }) {
+  const rawToken = createEmailVerificationToken();
+  const ttlHours = getEmailVerificationTtlHours();
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+
+  await userRepository.storeEmailVerificationToken(user.id, hashRawToken(rawToken), expiresAt);
+  return emailService.sendEmailVerificationEmail({
+    recipientEmail: user.email,
+    recipientName: user.name,
+    verificationToken: rawToken,
+    expiresInHours: ttlHours,
+  });
+}
+
+/**
  * Auth Controller
  * Gestisce la logica di registrazione, login e operazioni correlate
  */
 export class AuthController {
   private async issueEmailVerification(user: { id: string; email: string; name: string | null }) {
-    const rawToken = createEmailVerificationToken();
-    const ttlHours = getEmailVerificationTtlHours();
-    const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
-
-    await userRepository.storeEmailVerificationToken(user.id, hashRawToken(rawToken), expiresAt);
-    return emailService.sendEmailVerificationEmail({
-      recipientEmail: user.email,
-      recipientName: user.name,
-      verificationToken: rawToken,
-      expiresInHours: ttlHours,
-    });
+    return issueEmailVerification(user);
   }
 
   private async issuePasswordReset(user: { id: string; email: string; name: string | null }) {

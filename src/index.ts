@@ -326,6 +326,11 @@ async function createServer(): Promise<FastifyInstance> {
 
   // ==================== BUSINESS REQUESTS ENDPOINTS ====================
 
+  // Public endpoint: create bar registration request from website (no auth required)
+  app.post("/api/business-requests/public", async (request, reply) => {
+    return businessRequestController.createFromSite(request, reply);
+  });
+
   // Create a new business request (with optional document upload)
   app.post("/api/business-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
     return businessRequestController.create(request, reply);
