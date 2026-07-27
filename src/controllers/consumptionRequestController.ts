@@ -294,14 +294,14 @@ export class ConsumptionRequestController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const platformConfig = await platformConfigRepository.get();
-      if (!platformConfig.ocrEnabled) {
-        return reply.status(503).send({
-          success: false,
-          error: "OCR temporaneamente disabilitato. Usa il percorso manuale.",
-          code: "OCR_DISABLED",
-        });
-      }
+      // const platformConfig = await platformConfigRepository.get();
+      // if (!platformConfig.ocrEnabled) {
+      //   return reply.status(503).send({
+      //     success: false,
+      //     error: "OCR temporaneamente disabilitato. Usa il percorso manuale.",
+      //     code: "OCR_DISABLED",
+      //   });
+      // }
 
       // ── Leggi multipart ────────────────────────────────────────────────────
       let imageBuffer: Buffer | null = null;
