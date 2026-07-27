@@ -36,18 +36,24 @@ function mapRow(row: any): BarConfigDTO {
 }
 
 export class BarConfigRepository {
-  /** Returns stored config for a bar, falling back to defaults if not found. */
+  /** Returns stored config for a bar, falling back to defaults if not found or table missing. */
   async getByBarId(barId: string): Promise<BarConfigDTO> {
-    const result = await databaseService
-      .getPool()
-      .query("SELECT * FROM bar_config WHERE bar_id = $1", [barId]);
+    try {
+      const result = await databaseService
+        .getPool()
+        .query("SELECT * FROM bar_config WHERE bar_id = $1", [barId]);
 
-    if (result.rows.length === 0) {
+      if (result.rows.length === 0) {
+        const now = new Date();
+        return { barId, ...DEFAULTS, createdAt: now, updatedAt: now };
+      }
+
+      return mapRow(result.rows[0]);
+    } catch {
+      // Tabella non ancora creata (migration 004 non applicata) → restituisce i default
       const now = new Date();
       return { barId, ...DEFAULTS, createdAt: now, updatedAt: now };
     }
-
-    return mapRow(result.rows[0]);
   }
 
   async upsert(
