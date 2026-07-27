@@ -368,21 +368,6 @@ export class DatabaseService {
         CREATE INDEX IF NOT EXISTS idx_receipt_events_bar_created ON receipt_events (bar_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_receipt_events_user ON receipt_events (user_id, created_at);
 
-        ALTER TABLE bar_config
-          ALTER COLUMN gps_radius_meters     SET DEFAULT 50,
-          ALTER COLUMN cap_enabled           SET DEFAULT TRUE,
-          ALTER COLUMN cap_amount            SET DEFAULT 30.00,
-          ALTER COLUMN anomaly_enabled       SET DEFAULT TRUE,
-          ALTER COLUMN young_account_enabled SET DEFAULT TRUE;
-
-        UPDATE bar_config SET
-          gps_radius_meters     = LEAST(gps_radius_meters, 50),
-          cap_enabled           = TRUE,
-          cap_amount            = LEAST(cap_amount, 30.00),
-          anomaly_enabled       = TRUE,
-          young_account_enabled = TRUE,
-          updated_at            = CURRENT_TIMESTAMP;
-
         UPDATE platform_config
           SET value = '4'::jsonb, updated_at = CURRENT_TIMESTAMP
           WHERE key = 'rate_limit_per_user_per_bar_per_day';
@@ -393,6 +378,29 @@ export class DatabaseService {
           ('ocr_enabled',                  'false'::jsonb),
           ('mock_location_reject',         'true'::jsonb)
         ON CONFLICT (key) DO NOTHING;
+      `);
+
+      // ALTER/UPDATE bar_config in blocco separato con gestione errore:
+      // bar_config potrebbe non esistere su un DB fresco (migration 004 non ancora applicata)
+      await this.pool.query(`
+        DO $migration008$ BEGIN
+          ALTER TABLE bar_config
+            ALTER COLUMN gps_radius_meters     SET DEFAULT 50,
+            ALTER COLUMN cap_enabled           SET DEFAULT TRUE,
+            ALTER COLUMN cap_amount            SET DEFAULT 30.00,
+            ALTER COLUMN anomaly_enabled       SET DEFAULT TRUE,
+            ALTER COLUMN young_account_enabled SET DEFAULT TRUE;
+
+          UPDATE bar_config SET
+            gps_radius_meters     = LEAST(gps_radius_meters, 50),
+            cap_enabled           = TRUE,
+            cap_amount            = LEAST(cap_amount, 30.00),
+            anomaly_enabled       = TRUE,
+            young_account_enabled = TRUE,
+            updated_at            = CURRENT_TIMESTAMP;
+        EXCEPTION WHEN undefined_table THEN
+          NULL; -- bar_config non ancora creata, saltiamo
+        END $migration008$;
       `);
 
       console.log("✅ Tabelle database create con i campi specifici");

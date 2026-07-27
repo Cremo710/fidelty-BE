@@ -130,15 +130,17 @@ function formatMetricsText(m: PilotMetrics): string {
 }
 
 // Entry point quando eseguito direttamente
-const isMain =
-  import.meta.url.endsWith("pilotMetrics.ts") ||
-  import.meta.url.endsWith("pilotMetrics.js") ||
-  (process.argv[1] && (process.argv[1].endsWith("pilotMetrics.ts") || process.argv[1].endsWith("pilotMetrics.js")));
+// Usa solo process.argv[1] — import.meta.url è sempre il file corrente
+// anche quando il modulo viene importato, quindi non va usato per isMain.
+const isMain = Boolean(
+  process.argv[1] &&
+  (process.argv[1].endsWith("pilotMetrics.ts") || process.argv[1].endsWith("pilotMetrics.js")),
+);
 
 if (isMain) {
   (async () => {
     try {
-      await databaseService.initializeTables();
+      // Non serve initializeTables(): il pool si connette al DB già inizializzato
       const metrics = await collectPilotMetrics();
       const text = formatMetricsText(metrics);
       console.log(text);
