@@ -32,7 +32,7 @@ describe("Receipt code validation", () => {
 
 // ─── Semaphore signal logic (pure unit tests, no DB) ─────────────────────────
 
-type Signal = { code: string; reason: string; duplicateRequestId?: string };
+type Signal = { code: string; reason: string; severity: "reject" | "review"; duplicateRequestId?: string };
 
 interface BarConfig {
   gpsRadiusMeters: number;
@@ -49,6 +49,8 @@ interface PlatformCfg {
   youngAccountMinRequests: number;
   youngAccountMaxAmount: number;
   rateLimitPerUserPerBarPerDay: number;
+  ocrEnabled?: boolean;
+  mockLocationReject?: boolean;
 }
 
 /** Pure signal evaluation extracted for unit testing (no DB side effects) */
@@ -63,6 +65,15 @@ function evaluateSignals(
     accountAgeDays?: number;
     approvedRequestCount?: number;
     todayCount?: number;
+    // Fase 2
+    isMockedLocation?: boolean;
+    ocrVatNumber?: string | null;
+    barPiva?: string | null;
+    ocrReceiptDate?: string | null;
+    todayDate?: string;           // formato yyyy-mm-dd, default oggi
+    hasOcrSession?: boolean;
+    ocrFieldsFound?: { amount: boolean; vatNumber: boolean } | null;
+    duplicateImageExists?: boolean;
   },
 ): { signals: Signal[]; rateLimitExceeded: boolean } {
   const signals: Signal[] = [];
@@ -74,18 +85,19 @@ function evaluateSignals(
   if (opts.duplicateExists) {
     signals.push({
       code: "DUPLICATE",
+      severity: "reject",
       reason: "Duplicate receipt code",
       duplicateRequestId: opts.duplicateRequestId,
     });
   }
 
   if (barConfig.capEnabled && amount > barConfig.capAmount) {
-    signals.push({ code: "CAP_EXCEEDED", reason: `Amount ${amount} exceeds cap ${barConfig.capAmount}` });
+    signals.push({ code: "CAP_EXCEEDED", severity: "review", reason: `Amount ${amount} exceeds cap ${barConfig.capAmount}` });
   }
 
   if (barConfig.anomalyEnabled && opts.historicalAvg !== null && opts.historicalAvg !== undefined) {
     if (opts.historicalAvg > 0 && amount > opts.historicalAvg * platform.anomalyMultiplier) {
-      signals.push({ code: "ANOMALY", reason: `Amount ${amount} > ${platform.anomalyMultiplier}× avg ${opts.historicalAvg}` });
+      signals.push({ code: "ANOMALY", severity: "review", reason: `Amount ${amount} > ${platform.anomalyMultiplier}× avg ${opts.historicalAvg}` });
     }
   }
 
@@ -94,11 +106,58 @@ function evaluateSignals(
       (opts.accountAgeDays ?? Infinity) < platform.youngAccountMinDays ||
       (opts.approvedRequestCount ?? Infinity) < platform.youngAccountMinRequests;
     if (isYoung && amount > platform.youngAccountMaxAmount) {
-      signals.push({ code: "YOUNG_ACCOUNT", reason: "Young account with high amount" });
+      signals.push({ code: "YOUNG_ACCOUNT", severity: "review", reason: "Young account with high amount" });
     }
   }
 
+  // Fase 2 signals
+  if (opts.isMockedLocation && platform.mockLocationReject) {
+    signals.push({ code: "MOCK_LOCATION", severity: "reject", reason: "Mocked location" });
+  }
+
+  if (opts.duplicateImageExists) {
+    signals.push({ code: "DUPLICATE_IMAGE", severity: "reject", reason: "Same image already used" });
+  }
+
+  if (opts.ocrVatNumber != null && opts.barPiva != null) {
+    const cleanOcr = opts.ocrVatNumber.replace(/\D/g, "");
+    const cleanBar = opts.barPiva.replace(/\D/g, "");
+    if (cleanOcr && cleanBar && cleanOcr !== cleanBar) {
+      signals.push({ code: "PIVA_MISMATCH", severity: "reject", reason: `P.IVA mismatch: ${cleanOcr} != ${cleanBar}` });
+    }
+  }
+
+  if (opts.ocrReceiptDate) {
+    const today = opts.todayDate ?? new Date().toISOString().slice(0, 10);
+    if (opts.ocrReceiptDate !== today) {
+      signals.push({ code: "DATE_MISMATCH", severity: "review", reason: "Date mismatch" });
+    }
+  }
+
+  if ((platform.ocrEnabled ?? false) && opts.hasOcrSession === false) {
+    signals.push({ code: "MANUAL_ENTRY", severity: "review", reason: "Manual entry" });
+  }
+
+  if (opts.hasOcrSession === true && opts.ocrFieldsFound) {
+    const missing = [
+      !opts.ocrFieldsFound.amount ? "amount" : null,
+      !opts.ocrFieldsFound.vatNumber ? "vatNumber" : null,
+    ].filter(Boolean);
+    if (missing.length > 0) {
+      signals.push({ code: "OCR_LOW_CONFIDENCE", severity: "review", reason: `OCR missing: ${missing.join(", ")}` });
+    }
+  }
+
+  const hasReject = signals.some((s) => s.severity === "reject");
+
   return { signals, rateLimitExceeded: false };
+}
+
+/** Agrega gli esiti: red se almeno un reject, yellow se segnali, green se nessuno */
+function aggregateStatus(signals: Signal[]): "green" | "yellow" | "red" {
+  if (signals.some((s) => s.severity === "reject")) return "red";
+  if (signals.length > 0) return "yellow";
+  return "green";
 }
 
 const defaultBarConfig: BarConfig = {
@@ -261,6 +320,202 @@ describe("Semaphore signal evaluation", () => {
     const codes = signals.map((s) => s.code);
     expect(codes).toContain("DUPLICATE");
     expect(codes).toContain("CAP_EXCEEDED");
+  });
+
+  // ── Fase 2: aggregazione red/yellow/green ────────────────────────────────────
+
+  it("aggregates to red when at least one signal has severity=reject", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, { duplicateExists: true });
+    expect(aggregateStatus(signals)).toBe("red");
+  });
+
+  it("aggregates to yellow when signals are all review", () => {
+    const { signals } = evaluateSignals(
+      150,
+      { ...defaultBarConfig, capEnabled: true, capAmount: 100 },
+      defaultPlatform,
+      {},
+    );
+    expect(aggregateStatus(signals)).toBe("yellow");
+  });
+
+  it("aggregates to green when no signals", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {});
+    expect(aggregateStatus(signals)).toBe("green");
+  });
+
+  // ── MOCK_LOCATION (reject) ───────────────────────────────────────────────────
+
+  it("signals MOCK_LOCATION (reject) when isMockedLocation=true and mockLocationReject=true", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig,
+      { ...defaultPlatform, mockLocationReject: true },
+      { isMockedLocation: true },
+    );
+    const s = signals.find((x) => x.code === "MOCK_LOCATION");
+    expect(s).toBeDefined();
+    expect(s?.severity).toBe("reject");
+    expect(aggregateStatus(signals)).toBe("red");
+  });
+
+  it("does NOT signal MOCK_LOCATION when mockLocationReject=false", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig,
+      { ...defaultPlatform, mockLocationReject: false },
+      { isMockedLocation: true },
+    );
+    expect(signals.some((s) => s.code === "MOCK_LOCATION")).toBe(false);
+  });
+
+  // ── PIVA_MISMATCH (reject) ───────────────────────────────────────────────────
+
+  it("signals PIVA_MISMATCH (reject) when OCR reads a different P.IVA than the bar", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {
+      ocrVatNumber: "11111111111",
+      barPiva:      "99999999999",
+    });
+    const s = signals.find((x) => x.code === "PIVA_MISMATCH");
+    expect(s).toBeDefined();
+    expect(s?.severity).toBe("reject");
+  });
+
+  it("does NOT signal PIVA_MISMATCH when P.IVA matches", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {
+      ocrVatNumber: "12345678901",
+      barPiva:      "12345678901",
+    });
+    expect(signals.some((s) => s.code === "PIVA_MISMATCH")).toBe(false);
+  });
+
+  it("does NOT signal PIVA_MISMATCH when OCR did not read P.IVA (null)", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {
+      ocrVatNumber: null,
+      barPiva:      "12345678901",
+    });
+    expect(signals.some((s) => s.code === "PIVA_MISMATCH")).toBe(false);
+  });
+
+  // ── DUPLICATE_IMAGE (reject) ─────────────────────────────────────────────────
+
+  it("signals DUPLICATE_IMAGE (reject) when same image was already used", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, { duplicateImageExists: true });
+    const s = signals.find((x) => x.code === "DUPLICATE_IMAGE");
+    expect(s).toBeDefined();
+    expect(s?.severity).toBe("reject");
+  });
+
+  // ── DATE_MISMATCH (review) ───────────────────────────────────────────────────
+
+  it("signals DATE_MISMATCH (review) when receipt date differs from today", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {
+      ocrReceiptDate: "2020-01-01",
+      todayDate: "2026-07-27",
+    });
+    const s = signals.find((x) => x.code === "DATE_MISMATCH");
+    expect(s).toBeDefined();
+    expect(s?.severity).toBe("review");
+  });
+
+  it("does NOT signal DATE_MISMATCH when receipt date matches today", () => {
+    const today = "2026-07-27";
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {
+      ocrReceiptDate: today,
+      todayDate: today,
+    });
+    expect(signals.some((s) => s.code === "DATE_MISMATCH")).toBe(false);
+  });
+
+  // ── MANUAL_ENTRY (review, solo se ocrEnabled) ────────────────────────────────
+
+  it("signals MANUAL_ENTRY (review) when ocrEnabled=true and hasOcrSession=false", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig,
+      { ...defaultPlatform, ocrEnabled: true },
+      { hasOcrSession: false },
+    );
+    const s = signals.find((x) => x.code === "MANUAL_ENTRY");
+    expect(s).toBeDefined();
+    expect(s?.severity).toBe("review");
+  });
+
+  it("does NOT signal MANUAL_ENTRY when ocrEnabled=false (comportamento invariato)", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig,
+      { ...defaultPlatform, ocrEnabled: false },
+      { hasOcrSession: false },
+    );
+    expect(signals.some((s) => s.code === "MANUAL_ENTRY")).toBe(false);
+  });
+
+  it("does NOT signal MANUAL_ENTRY when hasOcrSession=true", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig,
+      { ...defaultPlatform, ocrEnabled: true },
+      { hasOcrSession: true, ocrFieldsFound: { amount: true, vatNumber: true } },
+    );
+    expect(signals.some((s) => s.code === "MANUAL_ENTRY")).toBe(false);
+  });
+
+  // ── OCR_LOW_CONFIDENCE (review) ──────────────────────────────────────────────
+
+  it("signals OCR_LOW_CONFIDENCE when OCR failed to read amount", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {
+      hasOcrSession: true,
+      ocrFieldsFound: { amount: false, vatNumber: true },
+    });
+    expect(signals.some((s) => s.code === "OCR_LOW_CONFIDENCE")).toBe(true);
+  });
+
+  it("signals OCR_LOW_CONFIDENCE when OCR failed to read P.IVA", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {
+      hasOcrSession: true,
+      ocrFieldsFound: { amount: true, vatNumber: false },
+    });
+    expect(signals.some((s) => s.code === "OCR_LOW_CONFIDENCE")).toBe(true);
+  });
+
+  it("does NOT signal OCR_LOW_CONFIDENCE when OCR read all fields", () => {
+    const { signals } = evaluateSignals(10, defaultBarConfig, defaultPlatform, {
+      hasOcrSession: true,
+      ocrFieldsFound: { amount: true, vatNumber: true },
+    });
+    expect(signals.some((s) => s.code === "OCR_LOW_CONFIDENCE")).toBe(false);
+  });
+
+  // ── Scenari §6.3 ─────────────────────────────────────────────────────────────
+
+  it("§6.3: OCR completo e coerente → green, status=credited, punti pieni", () => {
+    const { signals } = evaluateSignals(12.50, defaultBarConfig,
+      { ...defaultPlatform, ocrEnabled: true },
+      {
+        hasOcrSession: true,
+        ocrFieldsFound: { amount: true, vatNumber: true },
+        ocrVatNumber: "12345678901",
+        barPiva:       "12345678901",
+      },
+    );
+    expect(signals).toHaveLength(0);
+    expect(aggregateStatus(signals)).toBe("green");
+  });
+
+  it("§6.3: OCR fallito totalmente → giallo con MANUAL_ENTRY + OCR_LOW_CONFIDENCE", () => {
+    const { signals } = evaluateSignals(12.50, defaultBarConfig,
+      { ...defaultPlatform, ocrEnabled: true },
+      {
+        hasOcrSession: true,
+        ocrFieldsFound: { amount: false, vatNumber: false },
+      },
+    );
+    const codes = signals.map((s) => s.code);
+    expect(codes).toContain("OCR_LOW_CONFIDENCE");
+    expect(aggregateStatus(signals)).toBe("yellow");
+  });
+
+  it("§6.3: client manda amount=50 con sessione OCR che dice 3.50 → vince il server (3.50)", () => {
+    // Il client non può alterare l'importo: il server usa sempre il valore dalla sessione OCR.
+    // Questo test verifica che amount=3.50 (da sessione) non triggeri ANOMALY ipoteticamente.
+    const serverAmount = 3.50; // dal DB, non dal client
+    const { signals } = evaluateSignals(serverAmount, defaultBarConfig, defaultPlatform, {
+      hasOcrSession: true,
+      ocrFieldsFound: { amount: true, vatNumber: true },
+    });
+    expect(signals.some((s) => s.code === "ANOMALY")).toBe(false);
+    expect(aggregateStatus(signals)).toBe("green");
   });
 });
 

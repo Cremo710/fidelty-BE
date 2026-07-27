@@ -2,11 +2,25 @@ import { databaseService } from "./databaseService.js";
 import type { BarConfigDTO } from "../repositories/barConfigRepository.js";
 import { platformConfigRepository } from "../repositories/platformConfigRepository.js";
 
-export type SemaphoreStatus = "green" | "yellow";
+export type SemaphoreStatus = "green" | "yellow" | "red";
 
 export interface SignalFlag {
-  code: "DUPLICATE" | "CAP_EXCEEDED" | "ANOMALY" | "YOUNG_ACCOUNT" | "DAILY_POINTS_CAP" | "MANUAL_BAR_CREDIT";
+  code:
+    | "DUPLICATE"          // esistente
+    | "CAP_EXCEEDED"       // esistente
+    | "ANOMALY"            // esistente
+    | "YOUNG_ACCOUNT"      // esistente
+    | "DAILY_POINTS_CAP"   // Fase 0
+    | "MANUAL_BAR_CREDIT"  // Fase 0
+    | "PIVA_MISMATCH"      // Fase 2 — rosso
+    | "DUPLICATE_IMAGE"    // Fase 2 — rosso
+    | "MOCK_LOCATION"      // Fase 2 — rosso
+    | "DATE_MISMATCH"      // Fase 2 — giallo
+    | "MANUAL_ENTRY"       // Fase 2 — giallo
+    | "OCR_LOW_CONFIDENCE";// Fase 2 — giallo
   reason: string;
+  /** reject = rosso (rifiuto automatico); review = giallo (coda barista) */
+  severity: "reject" | "review";
   duplicateRequestId?: string;
 }
 
@@ -22,6 +36,14 @@ export interface SemaphoreInput {
   receiptCodeBlock1: string | null;
   receiptCodeBlock2: string | null;
   barConfig: BarConfigDTO;
+  // Fase 2 — nuovi campi opzionali (default sicuro se assenti)
+  barPiva?: string | null;          // P.IVA del bar: per PIVA_MISMATCH
+  ocrVatNumber?: string | null;     // P.IVA letta dall'OCR
+  ocrReceiptDate?: string | null;   // data ISO letta dall'OCR (yyyy-mm-dd)
+  hasOcrSession?: boolean;          // false = digitazione manuale → MANUAL_ENTRY
+  isMockedLocation?: boolean;       // per MOCK_LOCATION
+  imageSha256?: string | null;      // per DUPLICATE_IMAGE
+  ocrFieldsFound?: { amount: boolean; vatNumber: boolean } | null; // per OCR_LOW_CONFIDENCE
 }
 
 export class SemaphoreService {
@@ -85,11 +107,13 @@ export class SemaphoreService {
     if (userDailyPoints + pointsPreview > platform.maxPointsPerUserPerDay) {
       signals.push({
         code: "DAILY_POINTS_CAP",
+        severity: "review",
         reason: `Tetto punti giornaliero utente raggiunto (${userDailyPoints} pt oggi, limite ${platform.maxPointsPerUserPerDay} pt).`,
       });
     } else if (barDailyPoints + pointsPreview > platform.maxPointsPerBarPerDay) {
       signals.push({
         code: "DAILY_POINTS_CAP",
+        severity: "review",
         reason: `Tetto punti giornaliero del bar raggiunto (${barDailyPoints} pt oggi, limite ${platform.maxPointsPerBarPerDay} pt).`,
       });
     }
@@ -111,6 +135,7 @@ export class SemaphoreService {
       if (dupResult.rows.length > 0) {
         signals.push({
           code: "DUPLICATE",
+          severity: "reject",
           reason: `Codice scontrino ${receiptCodeBlock1}-${receiptCodeBlock2} già presente oggi per questo bar.`,
           duplicateRequestId: dupResult.rows[0].id,
         });
@@ -121,6 +146,7 @@ export class SemaphoreService {
     if (barConfig.capEnabled && amount > barConfig.capAmount) {
       signals.push({
         code: "CAP_EXCEEDED",
+        severity: "review",
         reason: `Importo (${amount.toFixed(2)} €) supera il limite configurato dal bar (${barConfig.capAmount.toFixed(2)} €).`,
       });
     }
@@ -142,6 +168,7 @@ export class SemaphoreService {
       if (avgAmount !== null && avgAmount > 0 && amount > avgAmount * platform.anomalyMultiplier) {
         signals.push({
           code: "ANOMALY",
+          severity: "review",
           reason: `Importo (${amount.toFixed(2)} €) supera ${platform.anomalyMultiplier}× la media storica del cliente (${avgAmount.toFixed(2)} €).`,
         });
       }
@@ -176,14 +203,99 @@ export class SemaphoreService {
         if (isYoung && amount > platform.youngAccountMaxAmount) {
           signals.push({
             code: "YOUNG_ACCOUNT",
+            severity: "review",
             reason: `Account giovane (${accountAgeDays} giorni, ${approvedRequestCount} consumazioni) con importo elevato (${amount.toFixed(2)} €).`,
           });
         }
       }
     }
 
+    // ── Segnali Fase 2 ────────────────────────────────────────────────────────
+
+    // MOCK_LOCATION (rifiuto): posizione simulata su Android
+    if (input.isMockedLocation && platform.mockLocationReject) {
+      signals.push({
+        code: "MOCK_LOCATION",
+        severity: "reject",
+        reason: "Posizione simulata rilevata. La richiesta non può essere accettata.",
+      });
+    }
+
+    // DUPLICATE_IMAGE (rifiuto): stessa foto già consumata da qualunque utente
+    if (input.imageSha256) {
+      const dupImg = await pool.query<{ id: string }>(
+        `SELECT id FROM receipt_ocr_sessions
+         WHERE image_sha256 = $1
+           AND consumed_at IS NOT NULL
+           AND user_id != $2
+         LIMIT 1`,
+        [input.imageSha256, userId],
+      );
+      if (dupImg.rows.length > 0) {
+        signals.push({
+          code: "DUPLICATE_IMAGE",
+          severity: "reject",
+          reason: "Questa foto scontrino risulta già utilizzata da un altro utente.",
+        });
+      }
+    }
+
+    // PIVA_MISMATCH (rifiuto): P.IVA letta ≠ P.IVA del bar
+    // Nota: se ocrVatNumber è null (non letta) NON è un mismatch — è OCR_LOW_CONFIDENCE
+    if (
+      input.ocrVatNumber !== null && input.ocrVatNumber !== undefined &&
+      input.barPiva !== null && input.barPiva !== undefined
+    ) {
+      const cleanOcr = input.ocrVatNumber.replace(/\D/g, "");
+      const cleanBar = input.barPiva.replace(/\D/g, "");
+      if (cleanOcr && cleanBar && cleanOcr !== cleanBar) {
+        signals.push({
+          code: "PIVA_MISMATCH",
+          severity: "reject",
+          reason: `La P.IVA sullo scontrino (${cleanOcr}) non corrisponde a quella del bar.`,
+        });
+      }
+    }
+
+    // DATE_MISMATCH (giallo): data scontrino ≠ oggi (fuso Europe/Rome)
+    if (input.ocrReceiptDate) {
+      const todayRome = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Rome" });
+      if (input.ocrReceiptDate !== todayRome) {
+        signals.push({
+          code: "DATE_MISMATCH",
+          severity: "review",
+          reason: `Data sullo scontrino (${input.ocrReceiptDate}) non corrisponde a oggi (${todayRome}).`,
+        });
+      }
+    }
+
+    // MANUAL_ENTRY (giallo): nessuna sessione OCR — solo quando ocr_enabled
+    if (platform.ocrEnabled && input.hasOcrSession === false) {
+      signals.push({
+        code: "MANUAL_ENTRY",
+        severity: "review",
+        reason: "Dati inseriti manualmente. La richiesta richiede conferma del barista.",
+      });
+    }
+
+    // OCR_LOW_CONFIDENCE (giallo): importo o P.IVA non letti dall'OCR
+    if (input.hasOcrSession === true && input.ocrFieldsFound) {
+      const missingFields: string[] = [];
+      if (!input.ocrFieldsFound.amount)    missingFields.push("importo");
+      if (!input.ocrFieldsFound.vatNumber) missingFields.push("P.IVA");
+      if (missingFields.length > 0) {
+        signals.push({
+          code: "OCR_LOW_CONFIDENCE",
+          severity: "review",
+          reason: `OCR non ha rilevato: ${missingFields.join(", ")}. Richiede verifica del barista.`,
+        });
+      }
+    }
+
+    // ── Aggregazione finale ───────────────────────────────────────────────────
+    const hasReject = signals.some((s) => s.severity === "reject");
     return {
-      status: signals.length === 0 ? "green" : "yellow",
+      status: hasReject ? "red" : signals.length === 0 ? "green" : "yellow",
       signals,
     };
   }

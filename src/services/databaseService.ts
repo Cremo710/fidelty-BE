@@ -354,6 +354,19 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_ocr_sessions_user    ON receipt_ocr_sessions (user_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_ocr_sessions_hash    ON receipt_ocr_sessions (image_sha256);
       CREATE INDEX IF NOT EXISTS idx_ocr_sessions_expires ON receipt_ocr_sessions (expires_at);
+
+      -- Migration 010: estende semaphore_status CHECK per includere 'red' (Fase 2)
+    `);
+
+    await this.pool.query(`
+      DO $migration010$ BEGIN
+        ALTER TABLE consumption_requests
+          DROP CONSTRAINT IF EXISTS consumption_requests_semaphore_status_check;
+        ALTER TABLE consumption_requests
+          ADD CONSTRAINT consumption_requests_semaphore_status_check
+          CHECK (semaphore_status IS NULL OR semaphore_status IN ('green', 'yellow', 'red'));
+      EXCEPTION WHEN undefined_table OR undefined_column THEN NULL;
+      END $migration010$;
     `);
 
       console.log("✅ Tabelle database create con i campi specifici");

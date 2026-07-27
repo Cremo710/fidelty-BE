@@ -456,7 +456,10 @@ export class ConsumptionRequestController {
         userLatitude?: number | string;
         userLongitude?: number | string;
         ocrSessionId?: string;
+        isMockedLocation?: boolean | string;
       } | undefined) || {};
+
+      const isMockedLocation = body.isMockedLocation === true || body.isMockedLocation === "true";
 
       // ── Passo 2 OCR: se presente ocrSessionId, usa i dati dal DB ────────────
       let ocrSession: {
@@ -468,7 +471,8 @@ export class ConsumptionRequestController {
       if (body.ocrSessionId) {
         const pool = databaseService.getPool();
         const sessionResult = await pool.query(
-          `SELECT id, user_id, bar_id, amount, doc_id, image_url
+          `SELECT id, user_id, bar_id, amount, doc_id, image_url,
+                  vat_number, receipt_date, fields_found, image_sha256, consumed_at
            FROM receipt_ocr_sessions
            WHERE id = $1`,
           [body.ocrSessionId],
@@ -595,6 +599,22 @@ export class ConsumptionRequestController {
           receiptCodeBlock1,
           receiptCodeBlock2,
           barConfig: barCfg,
+          // Fase 2 — nuovi campi
+          barPiva: bar.iva ?? null,
+          ocrVatNumber: ocrSession ? (ocrSession as any).vat_number ?? null : undefined,
+          ocrReceiptDate: ocrSession ? (ocrSession as any).receipt_date
+            ? new Date((ocrSession as any).receipt_date).toLocaleDateString("sv-SE", { timeZone: "Europe/Rome" })
+            : null
+            : undefined,
+          hasOcrSession: !!ocrSession,
+          isMockedLocation,
+          imageSha256: ocrSession ? (ocrSession as any).image_sha256 ?? null : null,
+          ocrFieldsFound: ocrSession && (ocrSession as any).fields_found
+            ? {
+                amount:    Boolean((ocrSession as any).fields_found?.amount),
+                vatNumber: Boolean((ocrSession as any).fields_found?.vatNumber),
+              }
+            : null,
         });
       } catch (semErr: any) {
         if (semErr?.code === "RATE_LIMIT_EXCEEDED") {
@@ -603,8 +623,12 @@ export class ConsumptionRequestController {
         throw semErr;
       }
 
+      const isRed       = evaluation.status === "red";
       const isAutoCredit = barCfg.autoCreditEnabled && evaluation.status === "green";
-      const initialStatus = isAutoCredit ? "credited" : "pending";
+      const initialStatus = isRed ? "rejected" : isAutoCredit ? "credited" : "pending";
+      const rejectionReason = isRed
+        ? (evaluation.signals.find((s) => s.severity === "reject")?.reason ?? "Rifiutato automaticamente.")
+        : null;
       const pointsPreview = Math.round(amount * platformConfig.pointsPerEuro);
 
       const requester = await userRepository.findById(userId);
@@ -620,9 +644,9 @@ export class ConsumptionRequestController {
               id, requester_user_id, bar_id, amount, points_preview, status,
               qr_code_value, requester_name_snapshot, requester_email_snapshot,
               receipt_code_block1, receipt_code_block2, receipt_submitted_at,
-              semaphore_status, signal_flags, updated_at
+              semaphore_status, signal_flags, rejection_reason, updated_at
            )
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,CURRENT_TIMESTAMP,$12,$13,CURRENT_TIMESTAMP)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,CURRENT_TIMESTAMP,$12,$13,$14,CURRENT_TIMESTAMP)
            RETURNING *`,
           [
             (await import("ulid")).ulid(),
@@ -638,6 +662,7 @@ export class ConsumptionRequestController {
             receiptCodeBlock2,
             evaluation.status,
             JSON.stringify(evaluation.signals),
+            rejectionReason,
           ],
         );
         created = insertResult.rows[0];
@@ -679,9 +704,9 @@ export class ConsumptionRequestController {
         ).catch(() => { /* non-critical */ });
       }
 
-      // ── Notify bar (only for yellow/pending) + shadow-mode event ─────────────
+      // ── Notify bar (only for yellow/pending — not for red or green) ──────────
       let notifChannel: string = "none";
-      if (!isAutoCredit) {
+      if (!isAutoCredit && !isRed) {
         const notifResult = await consumptionNotificationService.notifyBarOfNewRequest({
           barId: bar.id,
           barName: bar.name,
