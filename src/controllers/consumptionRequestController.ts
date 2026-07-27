@@ -354,14 +354,15 @@ export class ConsumptionRequestController {
       }
       const distMeters = getDistanceMeters(userLatitude, userLongitude, barLat, barLon);
       const maxDist = barCfg.gpsRadiusMeters > 0 ? barCfg.gpsRadiusMeters : getConsumptionRequestMaxDistanceMeters();
-      if (distMeters > maxDist) {
-        return reply.status(403).send({
-          success: false,
-          error: "Devi essere vicino al bar per inviare la richiesta",
-          code: "USER_TOO_FAR_FROM_BAR",
-          data: { distanceMeters: Math.round(distMeters), maxDistanceMeters: maxDist },
-        });
-      }
+      // RIMUOVERE COMMENTO prima di rilasciare!!!
+      // if (distMeters > maxDist) {
+      //   return reply.status(403).send({
+      //     success: false,
+      //     error: "Devi essere vicino al bar per inviare la richiesta",
+      //     code: "USER_TOO_FAR_FROM_BAR",
+      //     data: { distanceMeters: Math.round(distMeters), maxDistanceMeters: maxDist },
+      //   });
+      // }
 
       // ── sha256 dell'immagine originale ─────────────────────────────────────
       const imageSha256 = createHash("sha256").update(imageBuffer).digest("hex");
