@@ -5,7 +5,7 @@ import { platformConfigRepository } from "../repositories/platformConfigReposito
 export type SemaphoreStatus = "green" | "yellow";
 
 export interface SignalFlag {
-  code: "DUPLICATE" | "CAP_EXCEEDED" | "ANOMALY" | "YOUNG_ACCOUNT";
+  code: "DUPLICATE" | "CAP_EXCEEDED" | "ANOMALY" | "YOUNG_ACCOUNT" | "DAILY_POINTS_CAP" | "MANUAL_BAR_CREDIT";
   reason: string;
   duplicateRequestId?: string;
 }
@@ -53,6 +53,45 @@ export class SemaphoreService {
       const err = new Error("Hai raggiunto il limite di richieste giornaliere per questo bar.");
       (err as any).code = "RATE_LIMIT_EXCEEDED";
       throw err;
+    }
+
+    // ── Signal 0: Daily points cap (user + bar) ────────────────────────────
+    const pointsPreview = Math.round(input.amount * (await platformConfigRepository.get()).pointsPerEuro);
+
+    const [userDailyResult, barDailyResult] = await Promise.all([
+      pool.query<{ total: string }>(
+        `SELECT COALESCE(SUM(points_preview), 0) AS total
+         FROM consumption_requests
+         WHERE requester_user_id = $1
+           AND status IN ('approved', 'credited')
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome')
+           AND created_at  < date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day'`,
+        [userId],
+      ),
+      pool.query<{ total: string }>(
+        `SELECT COALESCE(SUM(points_preview), 0) AS total
+         FROM consumption_requests
+         WHERE bar_id = $1
+           AND status IN ('approved', 'credited')
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome')
+           AND created_at  < date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day'`,
+        [barId],
+      ),
+    ]);
+
+    const userDailyPoints = Number(userDailyResult.rows[0]?.total ?? 0);
+    const barDailyPoints  = Number(barDailyResult.rows[0]?.total ?? 0);
+
+    if (userDailyPoints + pointsPreview > platform.maxPointsPerUserPerDay) {
+      signals.push({
+        code: "DAILY_POINTS_CAP",
+        reason: `Tetto punti giornaliero utente raggiunto (${userDailyPoints} pt oggi, limite ${platform.maxPointsPerUserPerDay} pt).`,
+      });
+    } else if (barDailyPoints + pointsPreview > platform.maxPointsPerBarPerDay) {
+      signals.push({
+        code: "DAILY_POINTS_CAP",
+        reason: `Tetto punti giornaliero del bar raggiunto (${barDailyPoints} pt oggi, limite ${platform.maxPointsPerBarPerDay} pt).`,
+      });
     }
 
     // ── Signal 1: Duplicate receipt code (always active) ─────────────────────

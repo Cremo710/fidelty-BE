@@ -3,6 +3,7 @@ import { FastifyRequest, FastifyReply } from "fastify";
 import { getAuthService } from "../services/authService.js";
 import { userRepository } from "../repositories/userRepository.js";
 import { emailService } from "../services/emailService.js";
+import { databaseService } from "../services/databaseService.js";
 import { saveAndOptimizeImage, isImageFile, isFileSizeValid } from "../utils/imageUpload.js";
 import {
   validateEmailRequestInput,
@@ -715,6 +716,41 @@ export class AuthController {
       console.error("❌ Errore upload foto profilo:", error);
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
       return reply.status(500).send({ success: false, error: errorMessage, code: "UPLOAD_ERROR" });
+    }
+  }
+
+  async registerPushToken(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const body = (request.body as { token?: string; platform?: string } | undefined) || {};
+      const { token, platform } = body;
+
+      if (!token || typeof token !== "string" || token.trim().length === 0) {
+        return reply.status(400).send({ success: false, error: "token obbligatorio", code: "MISSING_TOKEN" });
+      }
+
+      const cleanToken = token.trim();
+      const cleanPlatform = platform && ["ios", "android"].includes(platform) ? platform : null;
+
+      const { ulid } = await import("ulid");
+      await databaseService.getPool().query(
+        `INSERT INTO device_push_tokens (id, user_id, token, platform, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT (token) DO UPDATE SET
+           user_id    = EXCLUDED.user_id,
+           platform   = COALESCE(EXCLUDED.platform, device_push_tokens.platform),
+           updated_at = CURRENT_TIMESTAMP`,
+        [ulid(), userId, cleanToken, cleanPlatform],
+      );
+
+      return reply.status(200).send({ success: true });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "PUSH_TOKEN_ERROR" });
     }
   }
 }

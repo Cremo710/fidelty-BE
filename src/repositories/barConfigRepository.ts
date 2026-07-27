@@ -13,12 +13,12 @@ export interface BarConfigDTO {
 }
 
 const DEFAULTS: Omit<BarConfigDTO, "barId" | "createdAt" | "updatedAt"> = {
-  gpsRadiusMeters: 100,
+  gpsRadiusMeters: 50,
   autoCreditEnabled: true,
-  capEnabled: false,
-  capAmount: 100,
-  anomalyEnabled: false,
-  youngAccountEnabled: false,
+  capEnabled: true,
+  capAmount: 30,
+  anomalyEnabled: true,
+  youngAccountEnabled: true,
 };
 
 function mapRow(row: any): BarConfigDTO {

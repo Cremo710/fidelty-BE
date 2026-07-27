@@ -160,6 +160,11 @@ async function createServer(): Promise<FastifyInstance> {
     return authController.uploadProfilePhoto(request, reply);
   });
 
+  // Register/update Expo push notification token (protected route)
+  app.put("/api/auth/push-token", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return authController.registerPushToken(request, reply);
+  });
+
   // ==================== USER SEARCH ENDPOINTS ====================
 
   // Search user by public_id (protected route)
@@ -379,6 +384,11 @@ async function createServer(): Promise<FastifyInstance> {
     return consumptionRequestController.updateStatus(request, reply);
   });
 
+  // Manual credit by bar owner (bar admin only)
+  app.post("/api/consumption-requests/manual-credit", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return consumptionRequestController.manualCredit(request, reply);
+  });
+
   // ==================== BAR CONFIG ENDPOINTS ====================
 
   app.get("/api/bar/config", { onRequest: [authenticateToken] }, async (request, reply) => {
@@ -393,6 +403,10 @@ async function createServer(): Promise<FastifyInstance> {
 
   app.post("/api/admin/revoke-points", { onRequest: [authenticateToken] }, async (request, reply) => {
     return adminController.revokePoints(request, reply);
+  });
+
+  app.get("/api/admin/pilot-metrics", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return adminController.getPilotMetrics(request, reply);
   });
 
   app.get("/api/loyalty-cards/my", { onRequest: [authenticateToken] }, async (request, reply) => {

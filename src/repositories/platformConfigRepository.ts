@@ -9,10 +9,16 @@ export interface PlatformConfig {
   youngAccountMaxAmount: number;
   consumptionDetailBonusPoints: number;
   consumptionDetailTolerancePct: number;
+  // Fase 0 — tetti punti giornalieri
+  maxPointsPerUserPerDay: number;  // TODO da tarare: ~60 € di consumazioni
+  maxPointsPerBarPerDay: number;   // TODO da tarare col titolare
+  // Feature flags
+  ocrEnabled: boolean;
+  mockLocationReject: boolean;
 }
 
 const HARDCODED_DEFAULTS: PlatformConfig = {
-  rateLimitPerUserPerBarPerDay: 15,
+  rateLimitPerUserPerBarPerDay: 4,
   pointsPerEuro: 100,
   anomalyMultiplier: 3.0,
   youngAccountMinDays: 7,
@@ -20,6 +26,10 @@ const HARDCODED_DEFAULTS: PlatformConfig = {
   youngAccountMaxAmount: 40,
   consumptionDetailBonusPoints: 100,
   consumptionDetailTolerancePct: 20,
+  maxPointsPerUserPerDay: 6000,
+  maxPointsPerBarPerDay: 200000,
+  ocrEnabled: false,
+  mockLocationReject: true,
 };
 
 export class PlatformConfigRepository {
@@ -49,6 +59,10 @@ export class PlatformConfigRepository {
         youngAccountMaxAmount:         Number(map.get("young_account_max_amount"))              || HARDCODED_DEFAULTS.youngAccountMaxAmount,
         consumptionDetailBonusPoints:  Number(map.get("consumption_detail_bonus_points"))       || HARDCODED_DEFAULTS.consumptionDetailBonusPoints,
         consumptionDetailTolerancePct: Number(map.get("consumption_detail_tolerance_pct"))      || HARDCODED_DEFAULTS.consumptionDetailTolerancePct,
+        maxPointsPerUserPerDay:        Number(map.get("max_points_per_user_per_day"))           || HARDCODED_DEFAULTS.maxPointsPerUserPerDay,
+        maxPointsPerBarPerDay:         Number(map.get("max_points_per_bar_per_day"))            || HARDCODED_DEFAULTS.maxPointsPerBarPerDay,
+        ocrEnabled:                    map.has("ocr_enabled") ? Boolean(map.get("ocr_enabled")) : HARDCODED_DEFAULTS.ocrEnabled,
+        mockLocationReject:            map.has("mock_location_reject") ? Boolean(map.get("mock_location_reject")) : HARDCODED_DEFAULTS.mockLocationReject,
       };
 
       this.cache = config;

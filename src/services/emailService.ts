@@ -446,6 +446,60 @@ class EmailService {
     return { subject, html, text };
   }
 
+  async sendNewConsumptionRequestEmail(input: {
+    recipientEmail: string;
+    recipientName?: string | null;
+    barName: string;
+    requesterName: string;
+    amount: number;
+    pointsPreview: number;
+    requestId: string;
+  }): Promise<EmailSendResult> {
+    const safeName = escapeHtml(input.recipientName || "ciao");
+    const safeBar = escapeHtml(input.barName);
+    const safeRequester = escapeHtml(input.requesterName);
+    const amountStr = input.amount.toFixed(2).replace(".", ",");
+
+    const subject = `Nuova richiesta consumazione — ${safeBar}`;
+    const html = `
+      <div style="margin:0;padding:32px;background:#f5f2fb;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1f1730;">
+        <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 12px 40px rgba(44,28,84,0.08);">
+          <div style="padding:24px 32px;background:linear-gradient(135deg,#8a63df 0%,#5fa2ff 100%);color:#fff;">
+            <div style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;opacity:0.82;font-weight:700;">Fidelty</div>
+            <h1 style="margin:12px 0 0;font-size:26px;line-height:1.2;">Nuova richiesta punti</h1>
+          </div>
+          <div style="padding:28px 32px;">
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.7;">${safeName}, <strong>${safeRequester}</strong> ha inviato una richiesta di consumazione al bar <strong>${safeBar}</strong>.</p>
+            <div style="padding:18px;border-radius:16px;background:#f7f4ff;border:1px solid rgba(113,87,186,0.16);margin-bottom:20px;">
+              <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#6f61a2;margin-bottom:10px;">Dettagli richiesta</div>
+              <div style="font-size:15px;color:#312648;line-height:1.8;">
+                <div>Importo: <strong>€ ${amountStr}</strong></div>
+                <div>Punti: <strong>${input.pointsPreview} pt</strong></div>
+              </div>
+            </div>
+            <p style="margin:0 0 8px;font-size:14px;color:#807791;">Apri l'app Fidelty per approvare o rifiutare la richiesta.</p>
+          </div>
+        </div>
+      </div>
+    `;
+    const text = [
+      `Ciao ${input.recipientName || ""},`,
+      "",
+      `${input.requesterName} ha inviato una richiesta di consumazione al bar ${input.barName}.`,
+      `Importo: € ${amountStr} — ${input.pointsPreview} punti`,
+      "",
+      "Apri l'app Fidelty per approvare o rifiutare la richiesta.",
+    ].join("\n");
+
+    return this.sendWithDefaultSender({
+      recipientEmail: input.recipientEmail,
+      subject,
+      html,
+      text,
+      kind: "nuova richiesta consumazione",
+    });
+  }
+
   async sendBusinessRequestDecisionEmail(input: BusinessDecisionEmailInput): Promise<EmailSendResult> {
     const template = input.status === "CONFIRMED"
       ? this.buildApprovalTemplate(input)

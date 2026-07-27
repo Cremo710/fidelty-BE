@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { pointsRevocationRepository } from "../repositories/pointsRevocationRepository.js";
+import { collectPilotMetrics } from "../scripts/pilotMetrics.js";
 
 /** Simple admin guard: userId must be in the ADMIN_USER_IDS env var (comma-separated). */
 function isAdmin(userId: string): boolean {
@@ -52,6 +53,24 @@ export class AdminController {
       return reply.status(201).send({ success: true, data: revocation });
     } catch (error) {
       return reply.status(500).send({ success: false, error: (error as Error).message, code: "REVOKE_POINTS_ERROR" });
+    }
+  }
+
+  async getPilotMetrics(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const adminId = (request as any).userId;
+      if (!adminId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      if (!isAdmin(adminId)) {
+        return reply.status(403).send({ success: false, error: "Accesso negato: richiesto ruolo admin", code: "FORBIDDEN" });
+      }
+
+      const metrics = await collectPilotMetrics();
+      return reply.status(200).send({ success: true, data: metrics });
+    } catch (error) {
+      return reply.status(500).send({ success: false, error: (error as Error).message, code: "PILOT_METRICS_ERROR" });
     }
   }
 }

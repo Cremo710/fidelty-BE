@@ -6,11 +6,11 @@ import { userRepository } from "../repositories/userRepository.js";
 import { consumptionNotificationService } from "../services/consumptionNotificationService.js";
 import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
 import { barConfigRepository } from "../repositories/barConfigRepository.js";
+import { platformConfigRepository } from "../repositories/platformConfigRepository.js";
 import { semaphoreService } from "../services/semaphoreService.js";
 import { databaseService } from "../services/databaseService.js";
 
 const QR_PREFIX = "FIDELTY_BAR:";
-const POINTS_PER_EURO = 100;
 
 const RECEIPT_CODE_RE = /^[0-9A-Za-z]{4}-[0-9A-Za-z]{4}$/;
 
@@ -348,7 +348,10 @@ export class ConsumptionRequestController {
       }
 
       // Bar-specific GPS radius (from bar_config) or env/default fallback
-      const barCfg = await barConfigRepository.getByBarId(bar.id);
+      const [barCfg, platformConfig] = await Promise.all([
+        barConfigRepository.getByBarId(bar.id),
+        platformConfigRepository.get(),
+      ]);
       const maxDistanceMeters = barCfg.gpsRadiusMeters > 0
         ? barCfg.gpsRadiusMeters
         : getConsumptionRequestMaxDistanceMeters();
@@ -387,7 +390,7 @@ export class ConsumptionRequestController {
 
       const isAutoCredit = barCfg.autoCreditEnabled && evaluation.status === "green";
       const initialStatus = isAutoCredit ? "credited" : "pending";
-      const pointsPreview = Math.round(amount * POINTS_PER_EURO);
+      const pointsPreview = Math.round(amount * platformConfig.pointsPerEuro);
 
       const requester = await userRepository.findById(userId);
 
@@ -453,17 +456,45 @@ export class ConsumptionRequestController {
         client.release();
       }
 
-      // ── Notify bar (only for yellow/pending) ────────────────────────────────
+      // ── Notify bar (only for yellow/pending) + shadow-mode event ─────────────
+      let notifChannel: string = "none";
       if (!isAutoCredit) {
-        await consumptionNotificationService.notifyBarOfNewRequest({
+        const notifResult = await consumptionNotificationService.notifyBarOfNewRequest({
           barId: bar.id,
           barName: bar.name,
+          barOwnerUserId: bar.user_id,
           requesterName: requester?.name || "Cliente",
           amount,
           pointsPreview,
           requestId: created.id,
-        }).catch(() => { /* non-critical */ });
+        }).catch(() => ({ delivered: false, channel: "none" as const }));
+        notifChannel = notifResult.channel;
       }
+
+      // Shadow mode: receipt_events (append-only, fire-and-forget)
+      (async () => {
+        try {
+          const { ulid: generateUlid } = await import("ulid");
+          await databaseService.getPool().query(
+            `INSERT INTO receipt_events (
+              id, user_id, bar_id, consumption_request_id,
+              distance_meters, amount, semaphore_status, signal_codes,
+              ocr_used, notification_channel, created_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,$9,CURRENT_TIMESTAMP)`,
+            [
+              generateUlid(),
+              userId,
+              bar.id,
+              created.id,
+              Math.round(distanceMeters),
+              amount.toFixed(2),
+              evaluation.status,
+              evaluation.signals.map((s) => s.code),
+              notifChannel,
+            ],
+          );
+        } catch { /* non-critical */ }
+      })();
 
       return reply.status(201).send({
         success: true,
@@ -609,6 +640,112 @@ export class ConsumptionRequestController {
       }
 
       return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_UPDATE_ERROR" });
+    }
+  }
+  async manualCredit(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const bar = await resolveOwnedBarForRequest(request);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      const body = (request.body as {
+        userPublicId?: string;
+        amount?: number | string;
+        note?: string;
+      } | undefined) || {};
+
+      const { userPublicId, note } = body;
+      const amount = typeof body.amount === "number" ? body.amount : Number.parseFloat(String(body.amount || ""));
+
+      if (!userPublicId || typeof userPublicId !== "string") {
+        return reply.status(400).send({ success: false, error: "userPublicId obbligatorio", code: "MISSING_USER_PUBLIC_ID" });
+      }
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return reply.status(400).send({ success: false, error: "Importo non valido", code: "INVALID_AMOUNT" });
+      }
+
+      const targetUser = await userRepository.findByPublicId(userPublicId.trim().toUpperCase());
+      if (!targetUser) {
+        return reply.status(404).send({ success: false, error: "Utente non trovato", code: "USER_NOT_FOUND" });
+      }
+
+      const platformConfig = await platformConfigRepository.get();
+      const pointsPreview = Math.round(amount * platformConfig.pointsPerEuro);
+      const signalReason = note ? `Credito manuale del barista: ${note}` : "Credito manuale del barista";
+
+      const client = await databaseService.getPool().connect();
+      let created: ConsumptionRequestDTO;
+      try {
+        await client.query("BEGIN");
+
+        const insertResult = await client.query(
+          `INSERT INTO consumption_requests (
+              id, requester_user_id, bar_id, amount, points_preview, status,
+              qr_code_value, requester_name_snapshot, requester_email_snapshot,
+              semaphore_status, signal_flags, updated_at
+           )
+           VALUES ($1,$2,$3,$4,$5,'credited',$6,$7,$8,'green',$9,CURRENT_TIMESTAMP)
+           RETURNING *`,
+          [
+            (await import("ulid")).ulid(),
+            targetUser.id,
+            bar.id,
+            amount.toFixed(2),
+            pointsPreview,
+            `${QR_PREFIX}${bar.iva}`,
+            targetUser.name || null,
+            targetUser.email || null,
+            JSON.stringify([{ code: "MANUAL_BAR_CREDIT", reason: signalReason }]),
+          ],
+        );
+        created = insertResult.rows[0];
+
+        await (await import("../repositories/loyaltyCardRepository.js"))
+          .loyaltyCardRepository.upsertCardInTransaction(client, targetUser.id, bar.id, pointsPreview);
+
+        await client.query("COMMIT");
+      } catch (txErr) {
+        await client.query("ROLLBACK");
+        throw txErr;
+      } finally {
+        client.release();
+      }
+
+      // Shadow mode: receipt_events fire-and-forget
+      (async () => {
+        try {
+          const { ulid: generateUlid } = await import("ulid");
+          await databaseService.getPool().query(
+            `INSERT INTO receipt_events (
+              id, user_id, bar_id, consumption_request_id,
+              amount, semaphore_status, signal_codes, ocr_used, notification_channel, created_at
+            ) VALUES ($1,$2,$3,$4,$5,'green','{"MANUAL_BAR_CREDIT"}',false,'none',CURRENT_TIMESTAMP)`,
+            [generateUlid(), targetUser.id, bar.id, created.id, amount.toFixed(2)],
+          );
+        } catch { /* non-critical */ }
+      })();
+
+      return reply.status(201).send({
+        success: true,
+        data: {
+          id: created.id,
+          status: "credited",
+          amount,
+          pointsPreview,
+          targetUser: { id: targetUser.id, name: targetUser.name, publicId: targetUser.public_id },
+          bar: { id: bar.id, name: bar.name },
+          createdAt: created.created_at,
+        },
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "MANUAL_CREDIT_ERROR" });
     }
   }
 }

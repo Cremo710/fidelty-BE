@@ -334,6 +334,67 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_offer_redemption_events_redemption_id ON offer_redemption_events(redemption_id);
       CREATE INDEX IF NOT EXISTS idx_offer_redemption_events_type ON offer_redemption_events(event_type);
     `);
+
+      // ── Migration 008: hardening pre-lancio (idempotente) ──────────────────
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS device_push_tokens (
+          id          VARCHAR(26)   PRIMARY KEY,
+          user_id     VARCHAR       NOT NULL,
+          token       TEXT          NOT NULL,
+          platform    VARCHAR(16),
+          created_at  TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at  TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (token)
+        );
+        CREATE INDEX IF NOT EXISTS idx_device_push_tokens_user ON device_push_tokens (user_id);
+
+        CREATE TABLE IF NOT EXISTS receipt_events (
+          id                      VARCHAR(26)   PRIMARY KEY,
+          user_id                 VARCHAR       NOT NULL,
+          bar_id                  VARCHAR(26)   NOT NULL,
+          consumption_request_id  VARCHAR(26),
+          distance_meters         INT,
+          amount                  NUMERIC(10,2),
+          semaphore_status        VARCHAR(10),
+          signal_codes            TEXT[],
+          ocr_used                BOOLEAN       NOT NULL DEFAULT FALSE,
+          ocr_fields_found        JSONB,
+          ocr_duration_ms         INT,
+          device_id               VARCHAR(128),
+          is_mocked_location      BOOLEAN,
+          notification_channel    VARCHAR(32),
+          created_at              TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_receipt_events_bar_created ON receipt_events (bar_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_receipt_events_user ON receipt_events (user_id, created_at);
+
+        ALTER TABLE bar_config
+          ALTER COLUMN gps_radius_meters     SET DEFAULT 50,
+          ALTER COLUMN cap_enabled           SET DEFAULT TRUE,
+          ALTER COLUMN cap_amount            SET DEFAULT 30.00,
+          ALTER COLUMN anomaly_enabled       SET DEFAULT TRUE,
+          ALTER COLUMN young_account_enabled SET DEFAULT TRUE;
+
+        UPDATE bar_config SET
+          gps_radius_meters     = LEAST(gps_radius_meters, 50),
+          cap_enabled           = TRUE,
+          cap_amount            = LEAST(cap_amount, 30.00),
+          anomaly_enabled       = TRUE,
+          young_account_enabled = TRUE,
+          updated_at            = CURRENT_TIMESTAMP;
+
+        UPDATE platform_config
+          SET value = '4'::jsonb, updated_at = CURRENT_TIMESTAMP
+          WHERE key = 'rate_limit_per_user_per_bar_per_day';
+
+        INSERT INTO platform_config (key, value) VALUES
+          ('max_points_per_user_per_day',  '6000'::jsonb),
+          ('max_points_per_bar_per_day',   '200000'::jsonb),
+          ('ocr_enabled',                  'false'::jsonb),
+          ('mock_location_reject',         'true'::jsonb)
+        ON CONFLICT (key) DO NOTHING;
+      `);
+
       console.log("✅ Tabelle database create con i campi specifici");
     } catch (error) {
       console.error(
