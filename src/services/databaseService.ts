@@ -367,23 +367,31 @@ export class DatabaseService {
         );
         CREATE INDEX IF NOT EXISTS idx_receipt_events_bar_created ON receipt_events (bar_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_receipt_events_user ON receipt_events (user_id, created_at);
+      `);
 
-        UPDATE platform_config
-          SET value = '4'::jsonb, updated_at = CURRENT_TIMESTAMP
-          WHERE key = 'rate_limit_per_user_per_bar_per_day';
+      // UPDATE/INSERT platform_config in blocco separato con gestione errore:
+      // platform_config potrebbe non esistere su un DB fresco (migration 005 non ancora applicata)
+      await this.pool.query(`
+        DO $migration008_platform$ BEGIN
+          UPDATE platform_config
+            SET value = '4'::jsonb, updated_at = CURRENT_TIMESTAMP
+            WHERE key = 'rate_limit_per_user_per_bar_per_day';
 
-        INSERT INTO platform_config (key, value) VALUES
-          ('max_points_per_user_per_day',  '6000'::jsonb),
-          ('max_points_per_bar_per_day',   '200000'::jsonb),
-          ('ocr_enabled',                  'false'::jsonb),
-          ('mock_location_reject',         'true'::jsonb)
-        ON CONFLICT (key) DO NOTHING;
+          INSERT INTO platform_config (key, value) VALUES
+            ('max_points_per_user_per_day',  '6000'::jsonb),
+            ('max_points_per_bar_per_day',   '200000'::jsonb),
+            ('ocr_enabled',                  'false'::jsonb),
+            ('mock_location_reject',         'true'::jsonb)
+          ON CONFLICT (key) DO NOTHING;
+        EXCEPTION WHEN undefined_table THEN
+          NULL; -- platform_config non ancora creata, saltiamo
+        END $migration008_platform$;
       `);
 
       // ALTER/UPDATE bar_config in blocco separato con gestione errore:
       // bar_config potrebbe non esistere su un DB fresco (migration 004 non ancora applicata)
       await this.pool.query(`
-        DO $migration008$ BEGIN
+        DO $migration008_barconfig$ BEGIN
           ALTER TABLE bar_config
             ALTER COLUMN gps_radius_meters     SET DEFAULT 50,
             ALTER COLUMN cap_enabled           SET DEFAULT TRUE,
@@ -400,7 +408,7 @@ export class DatabaseService {
             updated_at            = CURRENT_TIMESTAMP;
         EXCEPTION WHEN undefined_table THEN
           NULL; -- bar_config non ancora creata, saltiamo
-        END $migration008$;
+        END $migration008_barconfig$;
       `);
 
       console.log("✅ Tabelle database create con i campi specifici");
