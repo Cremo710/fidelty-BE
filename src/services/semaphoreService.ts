@@ -19,8 +19,8 @@ export interface SemaphoreInput {
   userId: string;
   barId: string;
   amount: number;
-  receiptCodeBlock1: string;
-  receiptCodeBlock2: string;
+  receiptCodeBlock1: string | null;
+  receiptCodeBlock2: string | null;
   barConfig: BarConfigDTO;
 }
 
@@ -94,25 +94,27 @@ export class SemaphoreService {
       });
     }
 
-    // ── Signal 1: Duplicate receipt code (always active) ─────────────────────
-    const dupResult = await pool.query<{ id: string; status: string }>(
-      `SELECT id, status
-       FROM consumption_requests
-       WHERE receipt_code_block1 = $1
-         AND receipt_code_block2 = $2
-         AND bar_id = $3
-         AND status != 'rejected'
-         AND date_trunc('day', created_at AT TIME ZONE 'Europe/Rome')
-             = date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome')
-       LIMIT 1`,
-      [receiptCodeBlock1, receiptCodeBlock2, barId],
-    );
-    if (dupResult.rows.length > 0) {
-      signals.push({
-        code: "DUPLICATE",
-        reason: `Codice scontrino ${receiptCodeBlock1}-${receiptCodeBlock2} già presente oggi per questo bar.`,
-        duplicateRequestId: dupResult.rows[0].id,
-      });
+    // ── Signal 1: Duplicate receipt code (solo se presente) ─────────────────
+    if (receiptCodeBlock1 !== null && receiptCodeBlock2 !== null) {
+      const dupResult = await pool.query<{ id: string; status: string }>(
+        `SELECT id, status
+         FROM consumption_requests
+         WHERE receipt_code_block1 = $1
+           AND receipt_code_block2 = $2
+           AND bar_id = $3
+           AND status != 'rejected'
+           AND date_trunc('day', created_at AT TIME ZONE 'Europe/Rome')
+               = date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome')
+         LIMIT 1`,
+        [receiptCodeBlock1, receiptCodeBlock2, barId],
+      );
+      if (dupResult.rows.length > 0) {
+        signals.push({
+          code: "DUPLICATE",
+          reason: `Codice scontrino ${receiptCodeBlock1}-${receiptCodeBlock2} già presente oggi per questo bar.`,
+          duplicateRequestId: dupResult.rows[0].id,
+        });
+      }
     }
 
     // ── Signal 2: Absolute cap (bar flag) ────────────────────────────────────

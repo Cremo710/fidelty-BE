@@ -367,6 +367,11 @@ async function createServer(): Promise<FastifyInstance> {
     return consumptionRequestController.create(request, reply);
   });
 
+  // Passo 1 OCR: carica foto scontrino, estrai campi, persisti sessione (gated da ocr_enabled)
+  app.post("/api/consumption-requests/ocr", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return consumptionRequestController.uploadReceiptForOcr(request, reply);
+  });
+
   app.get("/api/consumption-requests/my", { onRequest: [authenticateToken] }, async (request, reply) => {
     return consumptionRequestController.listForRequester(request, reply);
   });

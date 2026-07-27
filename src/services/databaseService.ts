@@ -333,6 +333,27 @@ export class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_offer_redemption_events_redemption_id ON offer_redemption_events(redemption_id);
       CREATE INDEX IF NOT EXISTS idx_offer_redemption_events_type ON offer_redemption_events(event_type);
+
+      -- Migration 009: sessioni OCR server-side (Fase 1)
+      CREATE TABLE IF NOT EXISTS receipt_ocr_sessions (
+        id            VARCHAR(26)   PRIMARY KEY,
+        user_id       VARCHAR       NOT NULL,
+        bar_id        VARCHAR(26)   NOT NULL REFERENCES bars(id) ON DELETE CASCADE,
+        amount        NUMERIC(10,2),
+        vat_number    VARCHAR(16),
+        doc_id        VARCHAR(16),
+        receipt_date  DATE,
+        image_sha256  CHAR(64)      NOT NULL,
+        image_url     TEXT,
+        raw_text      TEXT,
+        fields_found  JSONB         NOT NULL DEFAULT '{}'::jsonb,
+        consumed_at   TIMESTAMPTZ,
+        expires_at    TIMESTAMPTZ   NOT NULL,
+        created_at    TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_ocr_sessions_user    ON receipt_ocr_sessions (user_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_ocr_sessions_hash    ON receipt_ocr_sessions (image_sha256);
+      CREATE INDEX IF NOT EXISTS idx_ocr_sessions_expires ON receipt_ocr_sessions (expires_at);
     `);
 
       console.log("✅ Tabelle database create con i campi specifici");

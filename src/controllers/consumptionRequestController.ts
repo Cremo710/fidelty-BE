@@ -1,4 +1,5 @@
 import { FastifyReply, FastifyRequest } from "fastify";
+import { createHash } from "crypto";
 import { barRepository } from "../repositories/barRepository.js";
 import { consumptionRequestRepository, type ConsumptionRequestDTO, type ConsumptionRequestWithBarDTO } from "../repositories/consumptionRequestRepository.js";
 import { offerRedemptionRepository } from "../repositories/offerRedemptionRepository.js";
@@ -9,6 +10,8 @@ import { barConfigRepository } from "../repositories/barConfigRepository.js";
 import { platformConfigRepository } from "../repositories/platformConfigRepository.js";
 import { semaphoreService } from "../services/semaphoreService.js";
 import { databaseService } from "../services/databaseService.js";
+import { extractReceiptFields } from "../services/visionOcrService.js";
+import { uploadOptimizedImage } from "../utils/imageUpload.js";
 
 const QR_PREFIX = "FIDELTY_BAR:";
 
@@ -283,6 +286,161 @@ export class ConsumptionRequestController {
     }
   }
 
+  // ── Passo 1 OCR: ricevi foto, estrai campi, persisti sessione ─────────────
+  async uploadReceiptForOcr(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      const userId = (request as any).userId;
+      if (!userId) {
+        return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      const platformConfig = await platformConfigRepository.get();
+      if (!platformConfig.ocrEnabled) {
+        return reply.status(503).send({
+          success: false,
+          error: "OCR temporaneamente disabilitato. Usa il percorso manuale.",
+          code: "OCR_DISABLED",
+        });
+      }
+
+      // ── Leggi multipart ────────────────────────────────────────────────────
+      let imageBuffer: Buffer | null = null;
+      let imageMimeType: string | null = null;
+      const fields: Record<string, string> = {};
+
+      const parts = request.parts();
+      for await (const part of parts) {
+        if (part.type === "field") {
+          fields[part.fieldname] = String(part.value).trim();
+        } else if (part.type === "file" && part.fieldname === "receipt") {
+          const chunks: Buffer[] = [];
+          for await (const chunk of part.file) chunks.push(chunk as Buffer);
+          imageBuffer = Buffer.concat(chunks);
+          imageMimeType = part.mimetype;
+        } else if (part.type === "file") {
+          // Drena altri file per non bloccare il parser
+          for await (const _chunk of part.file) { /* drain */ }
+        }
+      }
+
+      if (!imageBuffer || imageBuffer.length === 0) {
+        return reply.status(400).send({ success: false, error: "Immagine scontrino mancante", code: "MISSING_RECEIPT_IMAGE" });
+      }
+
+      // ── Valida bar ─────────────────────────────────────────────────────────
+      const barId = fields.barId || "";
+      if (!barId) {
+        return reply.status(400).send({ success: false, error: "barId mancante", code: "MISSING_BAR_ID" });
+      }
+      const bar = await barRepository.findById(barId);
+      if (!bar) {
+        return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
+      }
+
+      // ── Valida GPS ─────────────────────────────────────────────────────────
+      const userLatitude  = Number.parseFloat(fields.userLatitude  || "");
+      const userLongitude = Number.parseFloat(fields.userLongitude || "");
+      const isMockedLocation = fields.isMockedLocation === "true";
+
+      const barCfg = await barConfigRepository.getByBarId(bar.id);
+
+      if (!Number.isFinite(userLatitude) || !Number.isFinite(userLongitude)) {
+        return reply.status(400).send({ success: false, error: "Posizione utente mancante o non valida", code: "USER_LOCATION_REQUIRED" });
+      }
+      const barLat = Number(bar.latitude);
+      const barLon = Number(bar.longitude);
+      if (!Number.isFinite(barLat) || !Number.isFinite(barLon)) {
+        return reply.status(400).send({ success: false, error: "Questo bar non ha una posizione valida", code: "BAR_LOCATION_UNAVAILABLE" });
+      }
+      const distMeters = getDistanceMeters(userLatitude, userLongitude, barLat, barLon);
+      const maxDist = barCfg.gpsRadiusMeters > 0 ? barCfg.gpsRadiusMeters : getConsumptionRequestMaxDistanceMeters();
+      if (distMeters > maxDist) {
+        return reply.status(403).send({
+          success: false,
+          error: "Devi essere vicino al bar per inviare la richiesta",
+          code: "USER_TOO_FAR_FROM_BAR",
+          data: { distanceMeters: Math.round(distMeters), maxDistanceMeters: maxDist },
+        });
+      }
+
+      // ── sha256 dell'immagine originale ─────────────────────────────────────
+      const imageSha256 = createHash("sha256").update(imageBuffer).digest("hex");
+
+      // ── Controlla duplicato immagine (stessa foto già consumata) ──────────
+      const pool = databaseService.getPool();
+      const dupImage = await pool.query<{ id: string; consumed_at: string | null }>(
+        "SELECT id, consumed_at FROM receipt_ocr_sessions WHERE image_sha256 = $1 LIMIT 1",
+        [imageSha256],
+      );
+      if (dupImage.rows.length > 0 && dupImage.rows[0].consumed_at !== null) {
+        return reply.status(409).send({
+          success: false,
+          error: "Questa foto scontrino è già stata utilizzata.",
+          code: "DUPLICATE_IMAGE",
+        });
+      }
+
+      // ── OCR ────────────────────────────────────────────────────────────────
+      const ocrResult = await extractReceiptFields(imageBuffer);
+
+      // ── Upload Cloudinary ──────────────────────────────────────────────────
+      let imageUrl: string | null = null;
+      try {
+        const uploadResult = await uploadOptimizedImage(imageBuffer, `receipt-${imageSha256.slice(0, 12)}.jpg`, "fidelty/receipts");
+        imageUrl = uploadResult.secure_url;
+      } catch (uploadErr) {
+        console.warn("⚠️ Upload Cloudinary scontrino fallito (non bloccante):", (uploadErr as Error).message);
+      }
+
+      // ── Persisti sessione OCR ──────────────────────────────────────────────
+      const { ulid } = await import("ulid");
+      const sessionId = ulid();
+      const fieldsFound = {
+        amount:    ocrResult.amount.value !== null,
+        vatNumber: ocrResult.vatNumber.value !== null,
+        docId:     ocrResult.docId.value !== null,
+        date:      ocrResult.date.value !== null,
+      };
+
+      await pool.query(
+        `INSERT INTO receipt_ocr_sessions (
+          id, user_id, bar_id, amount, vat_number, doc_id, receipt_date,
+          image_sha256, image_url, raw_text, fields_found, expires_at, created_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW() + INTERVAL '10 minutes',CURRENT_TIMESTAMP)`,
+        [
+          sessionId,
+          userId,
+          bar.id,
+          ocrResult.amount.value ?? null,
+          ocrResult.vatNumber.value ?? null,
+          ocrResult.docId.value ?? null,
+          ocrResult.date.value ?? null,
+          imageSha256,
+          imageUrl,
+          ocrResult.rawText.slice(0, 4000), // limita dimensione raw
+          JSON.stringify(fieldsFound),
+        ],
+      );
+
+      return reply.status(200).send({
+        success: true,
+        data: {
+          ocrSessionId: sessionId,
+          // Campi estratti (solo per visualizzazione — il server li userà dal DB al Passo 2)
+          amount:    ocrResult.amount.value,
+          docId:     ocrResult.docId.value,
+          date:      ocrResult.date.value,
+          vatNumber: ocrResult.vatNumber.value,
+          fieldsFound,
+          durationMs: ocrResult.durationMs,
+        },
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      return reply.status(500).send({ success: false, error: errorMessage, code: "OCR_UPLOAD_ERROR" });
+    }
+  }
+
   async create(request: FastifyRequest, reply: FastifyReply) {
     try {
       const userId = (request as any).userId;
@@ -297,38 +455,95 @@ export class ConsumptionRequestController {
         amount?: number | string;
         userLatitude?: number | string;
         userLongitude?: number | string;
+        ocrSessionId?: string;
       } | undefined) || {};
 
-      // ── Resolve bar (by barId or by QR piva) ────────────────────────────────
-      let bar = body.barId ? await barRepository.findById(body.barId) : null;
-      if (!bar) {
-        const vatNumber = parseBarQrValue(body.qrCodeValue || "");
-        if (!vatNumber) {
-          return reply.status(400).send({ success: false, error: "Codice QR o barId non valido", code: "INVALID_BAR_REFERENCE" });
+      // ── Passo 2 OCR: se presente ocrSessionId, usa i dati dal DB ────────────
+      let ocrSession: {
+        id: string; user_id: string; bar_id: string;
+        amount: string | null; doc_id: string | null;
+        image_url: string | null;
+      } | null = null;
+
+      if (body.ocrSessionId) {
+        const pool = databaseService.getPool();
+        const sessionResult = await pool.query(
+          `SELECT id, user_id, bar_id, amount, doc_id, image_url
+           FROM receipt_ocr_sessions
+           WHERE id = $1`,
+          [body.ocrSessionId],
+        );
+
+        if (sessionResult.rows.length === 0) {
+          return reply.status(400).send({ success: false, error: "Sessione OCR non trovata", code: "OCR_SESSION_NOT_FOUND" });
         }
-        bar = await barRepository.findByPiva(vatNumber);
+
+        const session = sessionResult.rows[0];
+
+        if (session.user_id !== userId) {
+          return reply.status(403).send({ success: false, error: "Sessione OCR non valida", code: "OCR_SESSION_INVALID" });
+        }
+        if (session.consumed_at !== null) {
+          return reply.status(409).send({ success: false, error: "Sessione OCR già utilizzata", code: "OCR_SESSION_ALREADY_CONSUMED" });
+        }
+        const expiresResult = await pool.query<{ expired: boolean }>(
+          "SELECT expires_at < NOW() AS expired FROM receipt_ocr_sessions WHERE id = $1",
+          [body.ocrSessionId],
+        );
+        if (expiresResult.rows[0]?.expired) {
+          return reply.status(410).send({ success: false, error: "Sessione OCR scaduta. Rifai la foto.", code: "OCR_SESSION_EXPIRED" });
+        }
+
+        ocrSession = session;
+      }
+
+      // ── Resolve bar (by barId o dal barId della sessione OCR) ───────────────
+      let bar = null;
+      if (ocrSession) {
+        bar = await barRepository.findById(ocrSession.bar_id);
+      } else {
+        bar = body.barId ? await barRepository.findById(body.barId) : null;
+        if (!bar) {
+          const vatNumber = parseBarQrValue(body.qrCodeValue || "");
+          if (!vatNumber) {
+            return reply.status(400).send({ success: false, error: "Codice QR o barId non valido", code: "INVALID_BAR_REFERENCE" });
+          }
+          bar = await barRepository.findByPiva(vatNumber);
+        }
       }
 
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
 
-      // ── Amount ───────────────────────────────────────────────────────────────
-      const amount = typeof body.amount === "number" ? body.amount : Number.parseFloat(String(body.amount || ""));
+      // ── Amount: dal DB se sessione OCR, altrimenti dal body ─────────────────
+      const amount = ocrSession
+        ? Number.parseFloat(String(ocrSession.amount || ""))
+        : (typeof body.amount === "number" ? body.amount : Number.parseFloat(String(body.amount || "")));
       if (!Number.isFinite(amount) || amount <= 0) {
         return reply.status(400).send({ success: false, error: "Importo non valido", code: "INVALID_AMOUNT" });
       }
 
-      // ── Receipt code validation ──────────────────────────────────────────────
-      const receiptCode = String(body.receiptCode || "").trim().toUpperCase();
-      if (!RECEIPT_CODE_RE.test(receiptCode)) {
-        return reply.status(400).send({
-          success: false,
-          error: "Codice scontrino non valido. Formato atteso: XXXX-XXXX",
-          code: "INVALID_RECEIPT_CODE",
-        });
+      // ── Receipt code: dal doc_id OCR oppure dal body ─────────────────────────
+      let receiptCodeBlock1: string | null = null;
+      let receiptCodeBlock2: string | null = null;
+
+      if (ocrSession) {
+        // Il doc_id dalla sessione potrebbe essere null — il partial index lo gestisce
+        if (ocrSession.doc_id && RECEIPT_CODE_RE.test(ocrSession.doc_id)) {
+          [receiptCodeBlock1, receiptCodeBlock2] = ocrSession.doc_id.split("-");
+        }
+      } else {
+        const receiptCode = String(body.receiptCode || "").trim().toUpperCase();
+        if (!RECEIPT_CODE_RE.test(receiptCode)) {
+          return reply.status(400).send({
+            success: false,
+            error: "Codice scontrino non valido. Formato atteso: XXXX-XXXX",
+            code: "INVALID_RECEIPT_CODE",
+          });
+        }
+        [receiptCodeBlock1, receiptCodeBlock2] = receiptCode.split("-");
       }
-      const [receiptCodeBlock1, receiptCodeBlock2] = receiptCode.split("-");
 
       // ── GPS check ────────────────────────────────────────────────────────────
       const userLatitude = typeof body.userLatitude === "number"
@@ -456,6 +671,14 @@ export class ConsumptionRequestController {
         client.release();
       }
 
+      // ── Marca sessione OCR come consumata ────────────────────────────────────
+      if (ocrSession) {
+        databaseService.getPool().query(
+          "UPDATE receipt_ocr_sessions SET consumed_at = NOW() WHERE id = $1",
+          [ocrSession.id],
+        ).catch(() => { /* non-critical */ });
+      }
+
       // ── Notify bar (only for yellow/pending) + shadow-mode event ─────────────
       let notifChannel: string = "none";
       if (!isAutoCredit) {
@@ -505,7 +728,9 @@ export class ConsumptionRequestController {
           signalFlags: Array.isArray(created.signal_flags) ? created.signal_flags : [],
           amount,
           pointsPreview,
-          receiptCode: `${receiptCodeBlock1}-${receiptCodeBlock2}`,
+          receiptCode: receiptCodeBlock1 && receiptCodeBlock2 ? `${receiptCodeBlock1}-${receiptCodeBlock2}` : null,
+          ocrSessionId: ocrSession?.id ?? null,
+          imageUrl: ocrSession ? (ocrSession.image_url ?? null) : null,
           requester: { id: userId, name: requester?.name || null, email: requester?.email || null },
           bar: { id: bar.id, name: bar.name, businessName: bar.merchant_name, piva: bar.iva, address: bar.address, logo: bar.logo },
           createdAt: created.created_at,
