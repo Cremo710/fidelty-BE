@@ -74,28 +74,61 @@ const AMOUNT_LABELS = [
   /TOTALE\s+COMPLESSIVO/,
   /TOTALE\s+EURO/,
   /IMPORTO\s+PAGATO/,
+  /TOTALE\s+DA\s+PAGARE/,
+  /DA\s+PAGARE/,
   /TOTALE(?!\s+(?:PARZIALE|IVA|SCONTI|PUNTI))/,
 ];
 
 // Numero in formato italiano: opzionale migliaia con punto, decimali con virgola
 const ITALIAN_NUMBER_RE = /(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/;
 
+function normalizeReceiptLines(text: string): string[] {
+  return text
+    .toUpperCase()
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function extractMonetaryCandidate(line: string): { raw: string; value: number } | null {
+  const matches = [...line.matchAll(ITALIAN_NUMBER_RE)];
+  if (matches.length === 0) return null;
+
+  const numericMatches = matches
+    .map((match) => {
+      const raw = match[1];
+      const value = Number.parseFloat(raw.replace(/\./g, "").replace(",", "."));
+      return Number.isFinite(value) && value > 0 ? { raw, value } : null;
+    })
+    .filter((match): match is { raw: string; value: number } => match !== null);
+
+  if (numericMatches.length === 0) return null;
+
+  if (numericMatches.length === 1) {
+    return numericMatches[0];
+  }
+
+  const hasIntermediateTotals = /\b(?:IVA|SCONTO|IMPONIBILE|TASSA|TAX|FEE)\b/.test(line);
+  return hasIntermediateTotals ? numericMatches[0] : numericMatches[numericMatches.length - 1];
+}
+
 function parseAmount(text: string): OcrField<number> {
-  // Normalizza: uppercase, collassa spazi multipli
-  const normalized = text.toUpperCase().replace(/\s+/g, " ");
-  const lines = normalized.split(/\n|\r\n?/);
+  const lines = normalizeReceiptLines(text);
 
   let lastMatch: { raw: string; value: number } | null = null;
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     for (const label of AMOUNT_LABELS) {
       if (!label.test(line)) continue;
-      const numberMatch = line.match(ITALIAN_NUMBER_RE);
-      if (!numberMatch) continue;
-      const raw = numberMatch[1];
-      const value = Number.parseFloat(raw.replace(/\./g, "").replace(",", "."));
-      if (Number.isFinite(value) && value > 0) {
-        lastMatch = { raw, value };
+
+      const currentLineCandidate = extractMonetaryCandidate(line);
+      const nextLineCandidate = currentLineCandidate ? null : extractMonetaryCandidate(lines[index + 1] ?? "");
+      const candidate = currentLineCandidate ?? nextLineCandidate;
+
+      if (candidate) {
+        lastMatch = candidate;
       }
     }
   }
@@ -133,13 +166,53 @@ function parseVatNumber(text: string): OcrField<string> {
 
 // ─── Parser: docId (numero documento scontrino) ────────────────────────────
 
-const DOC_ID_RE = /(?:DOCUMENTO\s*N\.?|DOC\.?\s*N\.?|N\.?\s*DOC\.?)\s*(\d{4})\s*[-\/]?\s*(\d{4})/i;
+const DOC_ID_LABEL_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)/i;
+const DOC_ID_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)\s*(?:N\.?|NO\.?|NUM\.?|N°)?\s*([0-9A-Z]{4})\s*[-\/\s]?\s*([0-9A-Z]{4})/i;
+const DOC_ID_SPLIT_RE = /\b([0-9A-Z]{4})\s*[-\/\s]\s*([0-9A-Z]{4})\b/;
+
+function extractDocIdFromLine(line: string): OcrField<string> {
+  const directMatch = line.match(DOC_ID_RE);
+  if (directMatch) {
+    return {
+      value: `${directMatch[1]}-${directMatch[2]}`,
+      confidence: 1,
+      raw: directMatch[0],
+    };
+  }
+
+  const splitMatch = line.match(DOC_ID_SPLIT_RE);
+  if (splitMatch && DOC_ID_LABEL_RE.test(line)) {
+    return {
+      value: `${splitMatch[1]}-${splitMatch[2]}`,
+      confidence: 0.9,
+      raw: splitMatch[0],
+    };
+  }
+
+  return { value: null, confidence: 0, raw: null };
+}
 
 function parseDocId(text: string): OcrField<string> {
-  const match = text.match(DOC_ID_RE);
-  if (!match) return { value: null, confidence: 0, raw: null };
-  const value = `${match[1]}-${match[2]}`;
-  return { value, confidence: 1, raw: match[0] };
+  const lines = normalizeReceiptLines(text);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!DOC_ID_LABEL_RE.test(line)) {
+      continue;
+    }
+
+    const lineCandidate = extractDocIdFromLine(line);
+    if (lineCandidate.value) {
+      return lineCandidate;
+    }
+
+    const nextLineCandidate = extractDocIdFromLine(lines[index + 1] ?? "");
+    if (nextLineCandidate.value) {
+      return nextLineCandidate;
+    }
+  }
+
+  return { value: null, confidence: 0, raw: null };
 }
 
 // ─── Parser: data ───────────────────────────────────────────────────────────

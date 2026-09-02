@@ -43,7 +43,7 @@ export interface SemaphoreInput {
   hasOcrSession?: boolean;          // false = digitazione manuale → MANUAL_ENTRY
   isMockedLocation?: boolean;       // per MOCK_LOCATION
   imageSha256?: string | null;      // per DUPLICATE_IMAGE
-  ocrFieldsFound?: { amount: boolean; vatNumber: boolean } | null; // per OCR_LOW_CONFIDENCE
+  ocrFieldsFound?: { amount: boolean; vatNumber: boolean; docId?: boolean; date?: boolean } | null; // per OCR_LOW_CONFIDENCE
 }
 
 export class SemaphoreService {
@@ -283,6 +283,7 @@ export class SemaphoreService {
       const missingFields: string[] = [];
       if (!input.ocrFieldsFound.amount)    missingFields.push("importo");
       if (!input.ocrFieldsFound.vatNumber) missingFields.push("P.IVA");
+      if (input.ocrFieldsFound.docId === false) missingFields.push("numero documento");
       if (missingFields.length > 0) {
         signals.push({
           code: "OCR_LOW_CONFIDENCE",

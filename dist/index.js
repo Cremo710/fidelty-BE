@@ -14,6 +14,8 @@ import { friendsController } from "./controllers/friendsController.js";
 import { businessRequestController } from "./controllers/businessRequestController.js";
 import { consumptionRequestController } from "./controllers/consumptionRequestController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
+import { barConfigController } from "./controllers/barConfigController.js";
+import { adminController } from "./controllers/adminController.js";
 import pg from "pg";
 const { Client } = pg;
 // ==================== CONFIGURATION ====================
@@ -23,6 +25,18 @@ const CONFIG = {
     host: process.env.HOST || "0.0.0.0",
     nodeEnv: process.env.NODE_ENV || "development",
 };
+function getAllowedCorsOrigins() {
+    const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+        .map((origin) => new RegExp(`^${origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+    return [
+        /^https?:\/\/localhost(:\d+)?$/,
+        /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+        ...configuredOrigins,
+    ];
+}
 // Create Fastify server
 async function createServer() {
     const app = Fastify({
@@ -48,13 +62,7 @@ async function createServer() {
             if (CONFIG.nodeEnv === "development" || !origin) {
                 return cb(null, true);
             }
-            // Add your production domains here
-            const allowedOrigins = [
-                /^https?:\/\/localhost(:\d+)?$/, // Localhost with any port
-                /^https?:\/\/127\.0\.0\.1(:\d+)?$/, // 127.0.0.1 with any port
-                // Add your production domain here, e.g.:
-                // /^https?:\/\/yourdomain\.com$/,
-            ].map((re) => new RegExp(re));
+            const allowedOrigins = getAllowedCorsOrigins();
             if (allowedOrigins.some((re) => re.test(origin))) {
                 return cb(null, true);
             }
@@ -117,6 +125,10 @@ async function createServer() {
     app.patch("/api/auth/profile-photo", { onRequest: [authenticateToken] }, async (request, reply) => {
         return authController.uploadProfilePhoto(request, reply);
     });
+    // Register/update Expo push notification token (protected route)
+    app.put("/api/auth/push-token", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return authController.registerPushToken(request, reply);
+    });
     // ==================== USER SEARCH ENDPOINTS ====================
     // Search user by public_id (protected route)
     app.get("/api/users/search", { onRequest: [authenticateToken] }, async (request, reply) => {
@@ -134,6 +146,9 @@ async function createServer() {
     // Get bar profile (protected route)
     app.get("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
         return barController.getBarByUser(request, reply);
+    });
+    app.get("/api/bar/profiles", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barController.listOwnedBars(request, reply);
     });
     app.get("/api/bar/dashboard-stats", { onRequest: [authenticateToken] }, async (request, reply) => {
         return barController.getDashboardStats(request, reply);
@@ -240,6 +255,10 @@ async function createServer() {
         return friendsController.removeFriend(request, reply);
     });
     // ==================== BUSINESS REQUESTS ENDPOINTS ====================
+    // Public endpoint: create bar registration request from website (no auth required)
+    app.post("/api/business-requests/public", async (request, reply) => {
+        return businessRequestController.createFromSite(request, reply);
+    });
     // Create a new business request (with optional document upload)
     app.post("/api/business-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
         return businessRequestController.create(request, reply);
@@ -264,14 +283,40 @@ async function createServer() {
     app.post("/api/consumption-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
         return consumptionRequestController.create(request, reply);
     });
+    // Passo 1 OCR: carica foto scontrino, estrai campi, persisti sessione (gated da ocr_enabled)
+    app.post("/api/consumption-requests/ocr", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return consumptionRequestController.uploadReceiptForOcr(request, reply);
+    });
     app.get("/api/consumption-requests/my", { onRequest: [authenticateToken] }, async (request, reply) => {
         return consumptionRequestController.listForRequester(request, reply);
     });
     app.get("/api/consumption-requests/bar/pending", { onRequest: [authenticateToken] }, async (request, reply) => {
         return consumptionRequestController.listPendingForBar(request, reply);
     });
+    // Green log: auto-credited requests for the bar's dashboard
+    app.get("/api/consumption-requests/bar/credited", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return consumptionRequestController.listCreditedForBar(request, reply);
+    });
     app.patch("/api/consumption-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
         return consumptionRequestController.updateStatus(request, reply);
+    });
+    // Manual credit by bar owner (bar admin only)
+    app.post("/api/consumption-requests/manual-credit", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return consumptionRequestController.manualCredit(request, reply);
+    });
+    // ==================== BAR CONFIG ENDPOINTS ====================
+    app.get("/api/bar/config", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barConfigController.getConfig(request, reply);
+    });
+    app.patch("/api/bar/config", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return barConfigController.updateConfig(request, reply);
+    });
+    // ==================== ADMIN ENDPOINTS ====================
+    app.post("/api/admin/revoke-points", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return adminController.revokePoints(request, reply);
+    });
+    app.get("/api/admin/pilot-metrics", { onRequest: [authenticateToken] }, async (request, reply) => {
+        return adminController.getPilotMetrics(request, reply);
     });
     app.get("/api/loyalty-cards/my", { onRequest: [authenticateToken] }, async (request, reply) => {
         return loyaltyCardController.listMine(request, reply);

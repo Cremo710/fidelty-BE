@@ -614,6 +614,8 @@ export class ConsumptionRequestController {
             ? {
                 amount:    Boolean((ocrSession as any).fields_found?.amount),
                 vatNumber: Boolean((ocrSession as any).fields_found?.vatNumber),
+                docId:     Boolean((ocrSession as any).fields_found?.docId),
+                date:      Boolean((ocrSession as any).fields_found?.date),
               }
             : null,
         });
