@@ -114,6 +114,48 @@ export async function uploadDocument(
   }
 }
 
+/**
+ * Estrae il public_id Cloudinary da una secure_url standard.
+ * Esempio:
+ * https://res.cloudinary.com/<cloud>/image/upload/v123/folder/file.jpg -> folder/file
+ */
+export function extractCloudinaryPublicIdFromUrl(imageUrl: string): string | null {
+  if (!imageUrl || typeof imageUrl !== "string") return null;
+
+  try {
+    const parsedUrl = new URL(imageUrl);
+    const marker = "/upload/";
+    const markerIndex = parsedUrl.pathname.indexOf(marker);
+    if (markerIndex === -1) return null;
+
+    let assetPath = parsedUrl.pathname.slice(markerIndex + marker.length);
+    assetPath = assetPath.replace(/^v\d+\//, "");
+    assetPath = assetPath.replace(/^\/+/, "");
+    if (!assetPath) return null;
+
+    return assetPath.replace(/\.[a-zA-Z0-9]+$/, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cancella una risorsa Cloudinary a partire da image URL.
+ */
+export async function deleteCloudinaryImageByUrl(imageUrl: string): Promise<boolean> {
+  const publicId = extractCloudinaryPublicIdFromUrl(imageUrl);
+  if (!publicId) return false;
+
+  try {
+    const result = await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+    const status = (result as { result?: string })?.result;
+    return status === "ok" || status === "not found";
+  } catch (error) {
+    console.warn("⚠️ Errore cancellazione immagine Cloudinary:", publicId, error);
+    return false;
+  }
+}
+
 const ACCEPTED_DOC_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",

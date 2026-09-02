@@ -11,7 +11,7 @@ import { platformConfigRepository } from "../repositories/platformConfigReposito
 import { semaphoreService } from "../services/semaphoreService.js";
 import { databaseService } from "../services/databaseService.js";
 import { extractReceiptFields } from "../services/visionOcrService.js";
-import { uploadOptimizedImage } from "../utils/imageUpload.js";
+import { deleteCloudinaryImageByUrl, uploadOptimizedImage } from "../utils/imageUpload.js";
 
 const QR_PREFIX = "FIDELTY_BAR:";
 
@@ -77,6 +77,43 @@ const parseBarQrValue = (rawValue: string): string | null => {
 };
 
 export class ConsumptionRequestController {
+  private async cleanupExpiredUnusedOcrSessions(limit = 30): Promise<void> {
+    const pool = databaseService.getPool();
+    const expiredResult = await pool.query<{ id: string; image_url: string | null }>(
+      `SELECT id, image_url
+       FROM receipt_ocr_sessions
+       WHERE consumed_at IS NULL
+         AND expires_at < NOW()
+       ORDER BY expires_at ASC
+       LIMIT $1`,
+      [limit],
+    );
+
+    if (expiredResult.rows.length === 0) {
+      return;
+    }
+
+    const deletableSessionIds: string[] = [];
+    for (const row of expiredResult.rows) {
+      if (!row.image_url) {
+        deletableSessionIds.push(row.id);
+        continue;
+      }
+
+      const deleted = await deleteCloudinaryImageByUrl(row.image_url);
+      if (deleted) {
+        deletableSessionIds.push(row.id);
+      }
+    }
+
+    if (deletableSessionIds.length > 0) {
+      await pool.query(
+        "DELETE FROM receipt_ocr_sessions WHERE id = ANY($1::varchar[])",
+        [deletableSessionIds],
+      );
+    }
+  }
+
   private buildRequesterActivityFeed(
     requests: ConsumptionRequestWithBarDTO[],
     offerRedemptions: Awaited<ReturnType<typeof offerRedemptionRepository.listActivityByUserId>>,
@@ -289,6 +326,11 @@ export class ConsumptionRequestController {
   // ── Passo 1 OCR: ricevi foto, estrai campi, persisti sessione ─────────────
   async uploadReceiptForOcr(request: FastifyRequest, reply: FastifyReply) {
     try {
+      // Opportunistic cleanup: evita accumulo immagini OCR mai confermate
+      this.cleanupExpiredUnusedOcrSessions().catch((cleanupError) => {
+        console.warn("⚠️ Cleanup sessioni OCR scadute fallito:", (cleanupError as Error).message);
+      });
+
       const userId = (request as any).userId;
       if (!userId) {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
