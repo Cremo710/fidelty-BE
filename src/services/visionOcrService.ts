@@ -120,6 +120,9 @@ const NOISE_LINE = new RegExp(
   ].join("|"),
 );
 
+const DATE_OR_TIME_LINE = /\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}\b|\b\d{1,2}:\d{2}\b/;
+const NON_AMOUNT_CONTEXT_LINE = /\b(?:DOCUMENTO|RT\b|TEL\b|ORA\b|DATA\b|CASSA\b|OPERATORE\b|CODICE\b)\b/;
+
 const NUMBER_TOKEN = /\d{1,3}(?:[.\s]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?/g;
 
 export function parseItalianNumber(raw: string): number | null {
@@ -222,12 +225,21 @@ export function parseAmount(text: string, options: ParseAmountOptions = {}): Amo
 
       if (!candidate) {
         for (let look = index + 1; look <= index + lookahead && look < lines.length; look += 1) {
-          if (NOISE_LINE.test(lines[look])) continue;
-          const next = pickCandidate(findCandidates(lines[look], maxAmount));
+          const lookLine = lines[look];
+          if (NOISE_LINE.test(lookLine)) continue;
+          if (DATE_OR_TIME_LINE.test(lookLine)) continue;
+          if (NON_AMOUNT_CONTEXT_LINE.test(lookLine)) continue;
+
+          const next = pickCandidate(
+            findCandidates(lookLine, maxAmount).filter(
+              (nextCandidate) => nextCandidate.hasDecimals || /\bEURO\b|€|\bCREDITO\b|\bDEBITO\b/.test(lookLine),
+            ),
+          );
+
           if (next) {
             candidate = next;
             fromNextLine = true;
-            sourceLine = lines[look];
+            sourceLine = lookLine;
             break;
           }
         }
@@ -322,7 +334,8 @@ function parseVatNumber(text: string): OcrField<string> {
 // ─── Parser: docId (numero documento scontrino) ────────────────────────────
 
 const DOC_ID_LABEL_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)/i;
-const DOC_ID_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)\s*(?:N\.?|NO\.?|NUM\.?|N°)?\s*([0-9A-Z]{4})\s*[-\/\s]?\s*([0-9A-Z]{4})/i;
+const DOC_ID_STRONG_LABEL_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)\s*(?:N\.?|NO\.?|NUM\.?|N°)/i;
+const DOC_ID_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)\s*(?:N\.?|NO\.?|NUM\.?|N°)\s*([0-9A-Z]{4})\s*[-\/]\s*([0-9A-Z]{4})/i;
 const DOC_ID_SPLIT_RE = /\b([0-9A-Z]{4})\s*[-\/\s]\s*([0-9A-Z]{4})\b/;
 
 function extractDocIdFromLine(line: string): OcrField<string> {
@@ -336,7 +349,7 @@ function extractDocIdFromLine(line: string): OcrField<string> {
   }
 
   const splitMatch = line.match(DOC_ID_SPLIT_RE);
-  if (splitMatch && DOC_ID_LABEL_RE.test(line)) {
+  if (splitMatch && DOC_ID_STRONG_LABEL_RE.test(line) && /\d/.test(`${splitMatch[1]}${splitMatch[2]}`)) {
     return {
       value: `${splitMatch[1]}-${splitMatch[2]}`,
       confidence: 0.9,
@@ -428,7 +441,7 @@ export async function extractReceiptFields(image: Buffer): Promise<OcrReceiptRes
     if (!rawText) return { ...nullResult, durationMs: Date.now() - startMs };
 
     // Parsing indipendente per ogni campo
-    const amount    = tryParse(() => parseAmount(rawText));
+    const amount    = tryParse(() => parseAmount(rawText, { lookaheadLines: 6 }));
     const vatNumber = tryParse(() => parseVatNumber(rawText));
     const docId     = tryParse(() => parseDocId(rawText));
     const date      = tryParse(() => parseDate(rawText));
