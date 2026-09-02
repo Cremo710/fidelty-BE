@@ -19,8 +19,28 @@ export interface OcrField<T> {
   raw: string | null;  // testo grezzo da cui è stato estratto il valore
 }
 
+export interface AmountField {
+  value: number | null;
+  confidence: number;   // 0–1
+  raw: string | null;   // token numerico grezzo
+  label: string | null; // label su cui è stato agganciato
+  line: string | null;  // riga completa, utile per il debug
+}
+
+export interface ParseAmountOptions {
+  /** Importo massimo plausibile per uno scontrino bar. Default 2000 €. */
+  maxAmount?: number;
+  /** Righe da guardare in avanti se la label non ha numeri sulla propria riga. Default 2. */
+  lookaheadLines?: number;
+  /**
+   * Se true e nessuna label viene trovata, cerca l'ultimo importo con decimali
+   * nella parte finale dello scontrino. Confidenza bassa. Default true.
+   */
+  enableFallback?: boolean;
+}
+
 export interface OcrReceiptResult {
-  amount:     OcrField<number>;   // in euro
+  amount:     AmountField;        // in euro
   vatNumber:  OcrField<string>;   // 11 cifre
   docId:      OcrField<string>;   // formato XXXX-XXXX
   date:       OcrField<string>;   // ISO yyyy-mm-dd
@@ -67,74 +87,209 @@ async function preprocessImage(buffer: Buffer): Promise<Buffer> {
 }
 
 // ─── Parser: importo ────────────────────────────────────────────────────────
-// Cerca le label principali e prende l'ULTIMO match (il totale finale è in fondo).
-// Gestisce il formato italiano: 1.234,56 → 1234.56
+// Righe preservate, lookup dopo label, ranking per priorità e fallback finale.
 
-const AMOUNT_LABELS = [
-  /TOTALE\s+COMPLESSIVO/,
-  /TOTALE\s+EURO/,
-  /IMPORTO\s+PAGATO/,
-  /TOTALE\s+DA\s+PAGARE/,
-  /DA\s+PAGARE/,
-  /TOTALE(?!\s+(?:PARZIALE|IVA|SCONTI|PUNTI))/,
+const AMOUNT_LABELS: Array<{ name: string; re: RegExp; priority: number }> = [
+  { name: "TOTALE COMPLESSIVO", re: /\bTOTALE\s+COMPLESSIVO\b/, priority: 100 },
+  { name: "TOTALE DA PAGARE", re: /\bTOTALE\s+DA\s+PAGARE\b/, priority: 96 },
+  { name: "TOTALE DOCUMENTO", re: /\bTOTALE\s+DOCUMENTO\b/, priority: 94 },
+  { name: "IMPORTO PAGATO", re: /\bIMPORTO\s+PAGATO\b/, priority: 92 },
+  { name: "TOTALE EURO", re: /\bTOTALE\s+EUROS?\b|\bTOTALE\s+€/, priority: 90 },
+  { name: "TOTALE", re: /\bTOTALE\b/, priority: 60 },
 ];
 
-// Numero in formato italiano: opzionale migliaia con punto, decimali con virgola
-const ITALIAN_NUMBER_RE = /(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/;
+const NOISE_LINE = new RegExp(
+  [
+    "\\bSUBTOTALE\\b",
+    "\\bTOTALE\\s+PARZIALE\\b",
+    "\\bTOTALE\\s+IVA\\b",
+    "\\bDI\\s+CUI\\s+IVA\\b",
+    "\\bIMPONIBILE\\b",
+    "\\bALIQUOTA\\b",
+    "\\bTOTALE\\s+SCONT",
+    "\\bSCONTO\\b",
+    "\\bTOTALE\\s+PUNTI\\b",
+    "\\bPUNTI\\b",
+    "\\bRESTO\\b",
+    "\\bNON\\s+RISCOSSO\\b",
+    "\\bTOTALE\\s+ARTICOLI\\b",
+    "\\bN\\.?\\s*ARTICOLI\\b",
+    "\\bPEZZI\\b",
+    "\\bTOTALE\\s+RESI\\b",
+    "\\bANNULL",
+  ].join("|"),
+);
 
-function normalizeReceiptLines(text: string): string[] {
-  return text
-    .toUpperCase()
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-}
+const NUMBER_TOKEN = /\d{1,3}(?:[.\s]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?/g;
 
-function extractMonetaryCandidate(line: string): { raw: string; value: number } | null {
-  const matches = [...line.matchAll(ITALIAN_NUMBER_RE)];
-  if (matches.length === 0) return null;
+export function parseItalianNumber(raw: string): number | null {
+  const s = raw.replace(/\s/g, "");
+  if (!/\d/.test(s)) return null;
 
-  const numericMatches = matches
-    .map((match) => {
-      const raw = match[1];
-      const value = Number.parseFloat(raw.replace(/\./g, "").replace(",", "."));
-      return Number.isFinite(value) && value > 0 ? { raw, value } : null;
-    })
-    .filter((match): match is { raw: string; value: number } => match !== null);
+  const lastComma = s.lastIndexOf(",");
+  const lastDot = s.lastIndexOf(".");
+  let sepIndex = -1;
 
-  if (numericMatches.length === 0) return null;
-
-  if (numericMatches.length === 1) {
-    return numericMatches[0];
+  if (lastComma > -1 && lastDot > -1) {
+    sepIndex = Math.max(lastComma, lastDot);
+  } else if (lastComma > -1) {
+    sepIndex = lastComma;
+  } else if (lastDot > -1) {
+    sepIndex = s.length - lastDot - 1 === 3 ? -1 : lastDot;
   }
 
-  const hasIntermediateTotals = /\b(?:IVA|SCONTO|IMPONIBILE|TASSA|TAX|FEE)\b/.test(line);
-  return hasIntermediateTotals ? numericMatches[0] : numericMatches[numericMatches.length - 1];
+  if (sepIndex === -1) {
+    const n = Number(s.replace(/[.,]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  }
+
+  const intPart = s.slice(0, sepIndex).replace(/[.,]/g, "");
+  const decPart = s.slice(sepIndex + 1);
+  const n = Number(`${intPart || "0"}.${decPart}`);
+  return Number.isFinite(n) ? n : null;
 }
 
-function parseAmount(text: string): OcrField<number> {
-  const lines = normalizeReceiptLines(text);
+interface Candidate {
+  value: number;
+  raw: string;
+  hasDecimals: boolean;
+}
 
-  let lastMatch: { raw: string; value: number } | null = null;
+function findCandidates(segment: string, maxAmount: number): Candidate[] {
+  const out: Candidate[] = [];
+  const re = new RegExp(NUMBER_TOKEN.source, "g");
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(segment)) !== null) {
+    const raw = match[0];
+    const value = parseItalianNumber(raw);
+    if (value === null || value <= 0 || value > maxAmount) continue;
+    out.push({ raw, value, hasDecimals: /[.,]\d{1,2}$/.test(raw.replace(/\s/g, "")) });
+  }
+
+  return out;
+}
+
+function pickCandidate(candidates: Candidate[]): Candidate | null {
+  if (candidates.length === 0) return null;
+  const withDecimals = candidates.filter((candidate) => candidate.hasDecimals);
+  const pool = withDecimals.length > 0 ? withDecimals : candidates;
+  return pool[pool.length - 1];
+}
+
+function normalizeReceiptLines(text: string): string[] {
+  return toLines(text);
+}
+
+function toLines(text: string): string[] {
+  return text
+    .toUpperCase()
+    .replace(/\u00A0/g, " ")
+    .replace(/[^\S\r\n]+/g, " ")
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+export function parseAmount(text: string, options: ParseAmountOptions = {}): AmountField {
+  const maxAmount = options.maxAmount ?? 2000;
+  const lookahead = options.lookaheadLines ?? 2;
+  const enableFallback = options.enableFallback ?? true;
+
+  if (!text || typeof text !== "string") {
+    return { value: null, confidence: 0, raw: null, label: null, line: null };
+  }
+
+  const lines = toLines(text);
+  if (lines.length === 0) {
+    return { value: null, confidence: 0, raw: null, label: null, line: null };
+  }
+
+  let best: (AmountField & { score: number }) | null = null;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    if (NOISE_LINE.test(line)) continue;
+
     for (const label of AMOUNT_LABELS) {
-      if (!label.test(line)) continue;
+      const match = line.match(label.re);
+      if (!match || match.index === undefined) continue;
 
-      const currentLineCandidate = extractMonetaryCandidate(line);
-      const nextLineCandidate = currentLineCandidate ? null : extractMonetaryCandidate(lines[index + 1] ?? "");
-      const candidate = currentLineCandidate ?? nextLineCandidate;
+      const after = line.slice(match.index + match[0].length);
+      let candidate = pickCandidate(findCandidates(after, maxAmount));
+      let fromNextLine = false;
+      let sourceLine = line;
 
-      if (candidate) {
-        lastMatch = candidate;
+      if (!candidate) {
+        for (let look = index + 1; look <= index + lookahead && look < lines.length; look += 1) {
+          if (NOISE_LINE.test(lines[look])) continue;
+          const next = pickCandidate(findCandidates(lines[look], maxAmount));
+          if (next) {
+            candidate = next;
+            fromNextLine = true;
+            sourceLine = lines[look];
+            break;
+          }
+        }
       }
+
+      if (!candidate) continue;
+
+      const score =
+        label.priority +
+        (candidate.hasDecimals ? 10 : 0) -
+        (fromNextLine ? 20 : 0) +
+        index / lines.length;
+
+      let confidence: number;
+      if (label.priority >= 90) confidence = candidate.hasDecimals ? 0.95 : 0.55;
+      else confidence = candidate.hasDecimals ? 0.8 : 0.45;
+      if (fromNextLine) confidence -= 0.2;
+
+      if (!best || score > best.score) {
+        best = {
+          value: candidate.value,
+          confidence: Math.max(0, Math.round(confidence * 100) / 100),
+          raw: candidate.raw,
+          label: label.name,
+          line: sourceLine,
+          score,
+        };
+      }
+
+      break;
     }
   }
 
-  if (!lastMatch) return { value: null, confidence: 0, raw: null };
-  return { value: lastMatch.value, confidence: 1, raw: lastMatch.raw };
+  if (best) {
+    const { score: _score, ...field } = best;
+    return field;
+  }
+
+  if (enableFallback) {
+    const tail = lines.slice(Math.floor(lines.length * 0.6));
+    const pool: Array<{ c: Candidate; line: string }> = [];
+
+    for (const line of tail) {
+      if (NOISE_LINE.test(line)) continue;
+      for (const candidate of findCandidates(line, maxAmount)) {
+        if (candidate.hasDecimals) pool.push({ c: candidate, line });
+      }
+    }
+
+    if (pool.length > 0) {
+      const top = pool.reduce((current, next) => (next.c.value > current.c.value ? next : current));
+      return {
+        value: top.c.value,
+        confidence: 0.3,
+        raw: top.c.raw,
+        label: null,
+        line: top.line,
+      };
+    }
+  }
+
+  return { value: null, confidence: 0, raw: null, label: null, line: null };
 }
 
 // ─── Parser: P.IVA ──────────────────────────────────────────────────────────
@@ -241,7 +396,7 @@ export async function extractReceiptFields(image: Buffer): Promise<OcrReceiptRes
 
   // Risultato di fallback (tutto null): permette al flusso di degradare a manuale
   const nullResult: OcrReceiptResult = {
-    amount:    { value: null, confidence: 0, raw: null },
+    amount:    { value: null, confidence: 0, raw: null, label: null, line: null },
     vatNumber: { value: null, confidence: 0, raw: null },
     docId:     { value: null, confidence: 0, raw: null },
     date:      { value: null, confidence: 0, raw: null },
@@ -293,10 +448,10 @@ export async function extractReceiptFields(image: Buffer): Promise<OcrReceiptRes
 }
 
 /** Esegue il parser in modo silenzioso: se fallisce, ritorna campo null. */
-function tryParse<T>(parser: () => OcrField<T>): OcrField<T> {
+function tryParse<T>(parser: () => T): T {
   try {
     return parser();
   } catch {
-    return { value: null, confidence: 0, raw: null };
+    return { value: null, confidence: 0, raw: null } as T;
   }
 }
