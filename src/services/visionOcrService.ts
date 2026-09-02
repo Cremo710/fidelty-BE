@@ -191,6 +191,7 @@ export async function extractReceiptFields(image: Buffer): Promise<OcrReceiptRes
       const [result] = await client.documentTextDetection({
         image: { content: processed.toString("base64") },
       });
+      console.log("Raw OCR result:", result);
       rawText = result.fullTextAnnotation?.text ?? "";
     } finally {
       clearTimeout(timeoutId);
