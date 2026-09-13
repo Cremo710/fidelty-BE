@@ -426,6 +426,24 @@ export class ConsumptionRequestController {
       // ── OCR ────────────────────────────────────────────────────────────────
       const ocrResult = await extractReceiptFields(imageBuffer);
 
+      // ── Gate P.IVA: blocca prima di qualsiasi persistenza/accredito ─────────
+      const extractedVatNumber = ocrResult.vatNumber.value;
+      if (!extractedVatNumber) {
+        return reply.status(422).send({
+          success: false,
+          error: "Partita IVA non leggibile sullo scontrino",
+          code: "PIVA_NOT_READABLE",
+        });
+      }
+      const barForVatNumber = await barRepository.findByPiva(extractedVatNumber);
+      if (!barForVatNumber) {
+        return reply.status(404).send({
+          success: false,
+          error: "Bar non riconosciuto, impossibile accreditare i punti",
+          code: "BAR_NOT_FOUND_BY_PIVA",
+        });
+      }
+
       // ── Upload Cloudinary ──────────────────────────────────────────────────
       let imageUrl: string | null = null;
       try {
