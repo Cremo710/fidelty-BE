@@ -129,11 +129,27 @@ export class AuthController {
         password: hashedPassword,
       });
       const createdUser = await userRepository.findById(userId);
-      const verificationDispatch = await this.issueEmailVerification({
-        id: userId,
-        email: input.email,
-        name: input.name,
-      });
+
+      let verificationDispatch;
+      try {
+        verificationDispatch = await this.issueEmailVerification({
+          id: userId,
+          email: input.email,
+          name: input.name,
+        });
+      } catch (emailError) {
+        // Evita utenti orfani non verificabili: se l'invio dell'email fallisce, annulla la registrazione
+        console.error("❌ Invio email di verifica fallito, rollback registrazione:", emailError);
+        await userRepository.deleteUser(userId).catch((deleteError) => {
+          console.error("❌ Errore durante il rollback dell'utente non verificato:", deleteError);
+        });
+
+        return reply.status(502).send({
+          success: false,
+          error: "Impossibile inviare l'email di verifica. Riprova la registrazione.",
+          code: "EMAIL_VERIFICATION_SEND_FAILED",
+        });
+      }
 
       console.log(`✅ Utente registrato con successo: ${input.email}`);
 
