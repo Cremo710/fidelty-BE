@@ -3,6 +3,7 @@ import { databaseService } from "../services/databaseService.js";
 import { userRepository } from "../repositories/userRepository.js";
 import { friendshipRepository } from "../repositories/friendshipRepository.js";
 import { pointTransferRepository } from "../repositories/pointTransferRepository.js";
+import { pointsTransferNotificationService } from "../services/pointsTransferNotificationService.js";
 
 const MAX_POINTS_PER_TRANSFER = 500;
 const DAILY_POINTS_TRANSFER_LIMIT = 1000;
@@ -372,6 +373,7 @@ class FriendsController {
         });
       }
 
+      const sender = await userRepository.findById(userId);
       await client.query("BEGIN");
       const { senderCard, recipientCard } = await pointTransferRepository.lockTransferCards(client, userId, target.id, barId);
       if (!senderCard || !recipientCard) {
@@ -419,6 +421,14 @@ class FriendsController {
       });
 
       await client.query("COMMIT");
+
+      await pointsTransferNotificationService.notifyRecipient({
+        recipientUserId: target.id,
+        senderName: sender?.name || "Un amico",
+        pointsAmount: pointsAmount || 0,
+        transferId: transfer.id,
+        barId,
+      });
 
       return reply.status(201).send({
         success: true,

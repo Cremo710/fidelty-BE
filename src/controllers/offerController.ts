@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { barRepository } from "../repositories/barRepository.js";
 import { offerRepository } from "../repositories/offerRepository.js";
+import { offerNotificationService } from "../services/offerNotificationService.js";
 import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
 import {
   validateCreateOfferInput,
@@ -34,6 +35,13 @@ export class OfferController {
       }
 
       const offerId = await offerRepository.createOffer(bar.id, validation.data!);
+      await offerNotificationService.notifyCustomersOfNewOffer({
+        barId: bar.id,
+        barOwnerUserId: userId,
+        barName: bar.name,
+        offerId,
+        offerTitle: validation.data!.title,
+      });
 
       return reply.status(201).send({
         success: true,
