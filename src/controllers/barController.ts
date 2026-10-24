@@ -77,6 +77,7 @@ export class BarController {
       facebook: bar.facebook,
       tiktok: bar.tiktok,
       website: bar.website,
+      description: bar.description ?? null,
       cardBackgroundImage: bar.card_background_image,
       cardColor: bar.card_color,
       cardUseCover: bar.card_use_cover,
@@ -384,6 +385,32 @@ export class BarController {
       }
 
       // Salva immagine background card (opzionale)
+      let description: string | null | undefined;
+      if (data.description !== undefined) {
+        const trimmed = typeof data.description === "string" ? data.description.trim() : "";
+        if (trimmed.length > 500) {
+          return reply.status(400).send({
+            success: false,
+            error: "La descrizione non può superare 500 caratteri",
+            code: "VALIDATION_ERROR",
+          });
+        }
+        description = trimmed || null;
+      }
+
+      const hasCardFields = "cardColor" in data
+        || data.cardUseCover !== undefined
+        || data.clearCardBackgroundImage !== undefined
+        || Boolean(cardBgFileBuffer);
+      if (!hasCardFields && description !== undefined) {
+        await barRepository.updateCardConfig(bar.id, { description });
+        return reply.status(200).send({
+          success: true,
+          message: "Descrizione aggiornata",
+          data: { description },
+        });
+      }
+
       const clearCardBackgroundImage = data.clearCardBackgroundImage === true;
       let cardBgImageUrl: string | null = clearCardBackgroundImage ? null : bar.card_background_image;
 
@@ -423,6 +450,7 @@ export class BarController {
         cardBackgroundImage: finalCardBgImage,
         cardColor: validation.data?.cardColor ?? null,
         cardUseCover,
+        description,
       });
 
       return reply.status(200).send({
@@ -432,6 +460,7 @@ export class BarController {
           cardBackgroundImage: finalCardBgImage,
           cardColor: validation.data?.cardColor ?? null,
           cardUseCover,
+          ...(description !== undefined ? { description } : {}),
         },
       });
     } catch (error) {

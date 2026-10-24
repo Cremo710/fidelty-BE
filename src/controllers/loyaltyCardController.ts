@@ -30,6 +30,7 @@ class LoyaltyCardController {
           latitude: card.latitude,
           longitude: card.longitude,
           image: card.coverImage,
+          description: card.description,
           points: card.availablePoints,
           totalPoints: card.totalPoints,
           frozenPoints: card.frozenPoints,

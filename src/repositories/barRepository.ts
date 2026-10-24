@@ -17,6 +17,7 @@ export interface BarDTO {
   facebook: string | null;
   tiktok: string | null;
   website: string | null;
+  description?: string | null;
   card_background_image: string | null;
   card_color: string | null;
   card_use_cover: boolean;
@@ -264,6 +265,7 @@ export class BarRepository {
     phone: string | null;
     image: string | null;
     logo: string | null;
+    description: string | null;
     latitude: number | null;
     longitude: number | null;
     created_at: Date;
@@ -283,6 +285,7 @@ export class BarRepository {
           phone,
           image,
           logo,
+          description,
           ${includeGeoColumns ? "latitude" : "NULL::double precision AS latitude"},
           ${includeGeoColumns ? "longitude" : "NULL::double precision AS longitude"},
           created_at,
@@ -504,6 +507,7 @@ export class BarRepository {
     cardBackgroundImage?: string | null;
     cardColor?: string | null;
     cardUseCover?: boolean;
+    description?: string | null;
   }): Promise<boolean> {
     const client = await databaseService.getPool().connect();
 
@@ -525,6 +529,10 @@ export class BarRepository {
       if (config.cardUseCover !== undefined) {
         fields.push(`card_use_cover = $${paramCount++}`);
         values.push(config.cardUseCover);
+      }
+      if (config.description !== undefined) {
+        fields.push(`description = $${paramCount++}`);
+        values.push(config.description);
       }
 
       if (fields.length === 0) {

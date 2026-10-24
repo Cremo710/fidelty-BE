@@ -128,6 +128,7 @@ export class DatabaseService {
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS facebook VARCHAR(255);
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS tiktok VARCHAR(255);
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS website VARCHAR(500);
+      ALTER TABLE bars ADD COLUMN IF NOT EXISTS description TEXT;
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS card_background_image TEXT;
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS card_color VARCHAR(50) DEFAULT '#bc7ed1';
       ALTER TABLE bars ADD COLUMN IF NOT EXISTS card_use_cover BOOLEAN DEFAULT FALSE;
@@ -431,6 +432,7 @@ export class DatabaseService {
     piva: string;
     phone: string | null;
     coverImage: string | null;
+    description: string | null;
     address: string | null;
     latitude: number | null;
     longitude: number | null;
@@ -452,6 +454,7 @@ export class DatabaseService {
         piva: card.piva,
         phone: card.phone,
         coverImage: card.coverImage,
+        description: card.description,
         address: card.address,
         latitude: card.latitude,
         longitude: card.longitude,

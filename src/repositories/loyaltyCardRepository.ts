@@ -20,6 +20,7 @@ export interface LoyaltyCardWithBar {
   piva: string;
   phone: string | null;
   coverImage: string | null;
+  description: string | null;
   address: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -114,6 +115,7 @@ export class LoyaltyCardRepository {
           b.iva AS piva,
           b.phone,
           b.image AS cover_image,
+          b.description,
           b.address,
           ${geoSelect},
           lc.points AS total_points,
@@ -144,6 +146,7 @@ export class LoyaltyCardRepository {
         piva: row.piva,
         phone: row.phone,
         coverImage: row.cover_image,
+        description: row.description ?? null,
         address: row.address,
         latitude: row.latitude,
         longitude: row.longitude,
