@@ -160,10 +160,6 @@ async function createServer(): Promise<FastifyInstance> {
     return authController.getProfile(request, reply);
   });
 
-  app.get("/api/auth/profile/ranking", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return authController.getRanking(request, reply);
-  });
-
   // Upload/update profile photo (protected route)
   app.patch("/api/auth/profile-photo", { onRequest: [authenticateToken] }, async (request, reply) => {
     return authController.uploadProfilePhoto(request, reply);

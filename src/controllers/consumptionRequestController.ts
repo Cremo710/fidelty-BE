@@ -1,6 +1,7 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 import { createHash } from "crypto";
 import { barRepository } from "../repositories/barRepository.js";
+import { evaluatePivaBarGate } from "../services/pivaBarGate.js";
 import { consumptionRequestRepository, type ConsumptionRequestDTO, type ConsumptionRequestWithBarDTO } from "../repositories/consumptionRequestRepository.js";
 import { offerRedemptionRepository } from "../repositories/offerRedemptionRepository.js";
 import { userRepository } from "../repositories/userRepository.js";
@@ -444,21 +445,15 @@ export class ConsumptionRequestController {
 
       // ── Gate P.IVA: blocca prima di qualsiasi persistenza/accredito ─────────
       const extractedVatNumber = ocrResult.vatNumber.value;
-      if (!extractedVatNumber) {
-        return reply.status(422).send({
+      const gate = await evaluatePivaBarGate(extractedVatNumber, (piva) => barRepository.findByPiva(piva));
+      if (gate.blocked) {
+        return reply.status(gate.status).send({
           success: false,
-          error: "Partita IVA non leggibile sullo scontrino",
-          code: "PIVA_NOT_READABLE",
+          error: gate.error,
+          code: gate.code,
         });
       }
-      const barForVatNumber = await barRepository.findByPiva(extractedVatNumber);
-      if (!barForVatNumber) {
-        return reply.status(404).send({
-          success: false,
-          error: "Bar non riconosciuto, impossibile accreditare i punti",
-          code: "BAR_NOT_FOUND_BY_PIVA",
-        });
-      }
+      const barForVatNumber = gate.bar;
 
       // ── Upload Cloudinary ──────────────────────────────────────────────────
       let imageUrl: string | null = null;

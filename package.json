@@ -14,7 +14,7 @@
     "dev": "cross-env NODE_ENV=development tsx watch src/index.ts",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,json}\"",
-    "test": "vitest",
+    "test": "vitest run",
     "migrate:ulid": "tsx src/migrations/migrateToUlid.ts",
     "backfill:public-ids": "tsx src/migrations/backfillPublicIds.ts",
     "ocr:benchmark": "tsx src/scripts/ocrBenchmark.ts",

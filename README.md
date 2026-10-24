@@ -84,3 +84,8 @@ Note pratiche:
 - porta 465: usa `SMTP_SECURE=true`
 - porta 587: usa `SMTP_SECURE=false` e, se richiesto dal provider, `SMTP_REQUIRE_TLS=true`
 - se in hosting vedi `ETIMEDOUT` durante la connessione SMTP, il backend sta raggiungendo male `SMTP_HOST:SMTP_PORT` oppure il provider richiede TLS/servername diversi
+
+## Test e lancio
+
+- `npm test` esegue i test unitari; quelli di integrazione richiedono `TEST_DATABASE_URL`.
+- Checklist di configurazione e lancio: [docs/DEPLOY_CHECKLIST.md](docs/DEPLOY_CHECKLIST.md).

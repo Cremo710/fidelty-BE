@@ -1,6 +1,17 @@
 import { databaseService } from "./databaseService.js";
 import type { BarConfigDTO } from "../repositories/barConfigRepository.js";
 import { platformConfigRepository } from "../repositories/platformConfigRepository.js";
+import {
+  aggregateStatus,
+  checkAnomaly,
+  checkCapExceeded,
+  checkDailyPointsCap,
+  checkDateMismatch,
+  checkMockLocation,
+  checkOcrLowConfidence,
+  checkPivaMismatch,
+  checkYoungAccount,
+} from "./semaphoreRules.js";
 
 export type SemaphoreStatus = "green" | "yellow" | "red";
 
@@ -106,19 +117,8 @@ export class SemaphoreService {
     const userDailyPoints = Number(userDailyResult.rows[0]?.total ?? 0);
     const barDailyPoints  = Number(barDailyResult.rows[0]?.total ?? 0);
 
-    if (userDailyPoints + pointsPreview > platform.maxPointsPerUserPerDay) {
-      signals.push({
-        code: "DAILY_POINTS_CAP",
-        severity: "review",
-        reason: `Tetto punti giornaliero utente raggiunto (${userDailyPoints} pt oggi, limite ${platform.maxPointsPerUserPerDay} pt).`,
-      });
-    } else if (barDailyPoints + pointsPreview > platform.maxPointsPerBarPerDay) {
-      signals.push({
-        code: "DAILY_POINTS_CAP",
-        severity: "review",
-        reason: `Tetto punti giornaliero del bar raggiunto (${barDailyPoints} pt oggi, limite ${platform.maxPointsPerBarPerDay} pt).`,
-      });
-    }
+    const dailyCap = checkDailyPointsCap(userDailyPoints, barDailyPoints, pointsPreview, platform);
+    if (dailyCap) signals.push(dailyCap);
 
     // ── Signal 1: Duplicate receipt code (solo se presente) ─────────────────
     if (receiptCodeBlock1 !== null && receiptCodeBlock2 !== null) {
@@ -145,13 +145,8 @@ export class SemaphoreService {
     }
 
     // ── Signal 2: Absolute cap (bar flag) ────────────────────────────────────
-    if (barConfig.capEnabled && amount > barConfig.capAmount) {
-      signals.push({
-        code: "CAP_EXCEEDED",
-        severity: "review",
-        reason: `Importo (${amount.toFixed(2)} €) supera il limite configurato dal bar (${barConfig.capAmount.toFixed(2)} €).`,
-      });
-    }
+    const capSignal = checkCapExceeded(amount, barConfig);
+    if (capSignal) signals.push(capSignal);
 
     // ── Signal 3: Historical anomaly (bar flag) ──────────────────────────────
     if (barConfig.anomalyEnabled) {
@@ -167,13 +162,8 @@ export class SemaphoreService {
         ? Number(avgResult.rows[0]?.avg_amount)
         : null;
 
-      if (avgAmount !== null && avgAmount > 0 && amount > avgAmount * platform.anomalyMultiplier) {
-        signals.push({
-          code: "ANOMALY",
-          severity: "review",
-          reason: `Importo (${amount.toFixed(2)} €) supera ${platform.anomalyMultiplier}× la media storica del cliente (${avgAmount.toFixed(2)} €).`,
-        });
-      }
+      const anomaly = checkAnomaly(amount, avgAmount, platform.anomalyMultiplier);
+      if (anomaly) signals.push(anomaly);
     }
 
     // ── Signal 4: Young account + high amount (bar flag) ─────────────────────
@@ -198,30 +188,16 @@ export class SemaphoreService {
         const accountAgeDays = Math.floor(
           (Date.now() - new Date(accountCreatedAt).getTime()) / 86_400_000,
         );
-        const isYoung =
-          accountAgeDays < platform.youngAccountMinDays ||
-          approvedRequestCount < platform.youngAccountMinRequests;
-
-        if (isYoung && amount > platform.youngAccountMaxAmount) {
-          signals.push({
-            code: "YOUNG_ACCOUNT",
-            severity: "review",
-            reason: `Account giovane (${accountAgeDays} giorni, ${approvedRequestCount} consumazioni) con importo elevato (${amount.toFixed(2)} €).`,
-          });
-        }
+        const young = checkYoungAccount(amount, accountAgeDays, approvedRequestCount, platform);
+        if (young) signals.push(young);
       }
     }
 
     // ── Segnali Fase 2 ────────────────────────────────────────────────────────
 
     // MOCK_LOCATION (rifiuto): posizione simulata su Android
-    if (input.isMockedLocation && platform.mockLocationReject) {
-      signals.push({
-        code: "MOCK_LOCATION",
-        severity: "reject",
-        reason: "Posizione simulata rilevata. La richiesta non può essere accettata.",
-      });
-    }
+    const mock = checkMockLocation(input.isMockedLocation, platform.mockLocationReject);
+    if (mock) signals.push(mock);
 
     // DUPLICATE_IMAGE (rifiuto): stessa foto già consumata da qualunque utente
     if (input.imageSha256) {
@@ -242,56 +218,18 @@ export class SemaphoreService {
       }
     }
 
-    // PIVA_MISMATCH (rifiuto): P.IVA letta ≠ P.IVA del bar
-    // Nota: se ocrVatNumber è null (non letta) NON è un mismatch — è OCR_LOW_CONFIDENCE
-    if (
-      input.ocrVatNumber !== null && input.ocrVatNumber !== undefined &&
-      input.barPiva !== null && input.barPiva !== undefined
-    ) {
-      const cleanOcr = input.ocrVatNumber.replace(/\D/g, "");
-      const cleanBar = input.barPiva.replace(/\D/g, "");
-      if (cleanOcr && cleanBar && cleanOcr !== cleanBar) {
-        signals.push({
-          code: "PIVA_MISMATCH",
-          severity: "reject",
-          reason: `La P.IVA sullo scontrino (${cleanOcr}) non corrisponde a quella del bar.`,
-        });
-      }
-    }
+    const pivaMismatch = checkPivaMismatch(input.ocrVatNumber, input.barPiva);
+    if (pivaMismatch) signals.push(pivaMismatch);
 
-    // DATE_MISMATCH (giallo): data scontrino ≠ oggi (fuso Europe/Rome)
-    if (input.ocrReceiptDate) {
-      const todayRome = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Rome" });
-      if (input.ocrReceiptDate !== todayRome) {
-        signals.push({
-          code: "DATE_MISMATCH",
-          severity: "review",
-          reason: `Data sullo scontrino (${input.ocrReceiptDate}) non corrisponde a oggi (${todayRome}).`,
-        });
-      }
-    }
+    const todayRome = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Rome" });
+    const dateMismatch = checkDateMismatch(input.ocrReceiptDate, todayRome);
+    if (dateMismatch) signals.push(dateMismatch);
 
-    // OCR_LOW_CONFIDENCE (giallo): importo o P.IVA non letti dall'OCR
-    if (input.hasOcrSession === true && input.ocrFieldsFound) {
-      const missingFields: string[] = [];
-      if (!input.ocrFieldsFound.amount)    missingFields.push("importo");
-      if (!input.ocrFieldsFound.vatNumber) missingFields.push("P.IVA");
-      if (input.ocrFieldsFound.docId === false) missingFields.push("numero documento");
-      if (missingFields.length > 0) {
-        signals.push({
-          code: "OCR_LOW_CONFIDENCE",
-          severity: "review",
-          reason: `OCR non ha rilevato: ${missingFields.join(", ")}. Richiede verifica del barista.`,
-        });
-      }
-    }
+    const ocrLow = checkOcrLowConfidence(input.hasOcrSession, input.ocrFieldsFound);
+    if (ocrLow) signals.push(ocrLow);
 
     // ── Aggregazione finale ───────────────────────────────────────────────────
-    const hasReject = signals.some((s) => s.severity === "reject");
-    return {
-      status: hasReject ? "red" : signals.length === 0 ? "green" : "yellow",
-      signals,
-    };
+    return { status: aggregateStatus(signals), signals };
   }
 }
 
