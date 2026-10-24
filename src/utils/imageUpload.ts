@@ -37,7 +37,8 @@ export async function saveAndOptimizeImage(
 export async function uploadOptimizedImage(
   bufferFile: Buffer,
   filename: string,
-  folder: string = "fidelty/bars"
+  folder: string = "fidelty/bars",
+  deliveryType: "upload" | "authenticated" = "upload"
 ): Promise<{ secure_url: string; public_id: string }> {
   try {
     // Ottimizza con sharp prima di caricare
@@ -58,6 +59,7 @@ export async function uploadOptimizedImage(
           folder,
           public_id: `${timestamp}-${safeName}`,
           resource_type: "image",
+          type: deliveryType,
           overwrite: false,
         },
         (error, result) => {
@@ -96,6 +98,7 @@ export async function uploadDocument(
           folder,
           public_id: `${timestamp}-${safeName}`,
           resource_type: resourceType,
+          type: "authenticated",
           overwrite: false,
         },
         (error, result) => {
@@ -120,38 +123,80 @@ export async function uploadDocument(
  * https://res.cloudinary.com/<cloud>/image/upload/v123/folder/file.jpg -> folder/file
  */
 export function extractCloudinaryPublicIdFromUrl(imageUrl: string): string | null {
+  return parseCloudinaryUrl(imageUrl)?.publicId ?? null;
+}
+
+interface ParsedCloudinaryUrl {
+  resourceType: "image" | "raw";
+  deliveryType: string;
+  publicId: string;
+  format: string | null;
+}
+
+function parseCloudinaryUrl(imageUrl: string): ParsedCloudinaryUrl | null {
   if (!imageUrl || typeof imageUrl !== "string") return null;
 
   try {
-    const parsedUrl = new URL(imageUrl);
-    const marker = "/upload/";
-    const markerIndex = parsedUrl.pathname.indexOf(marker);
-    if (markerIndex === -1) return null;
+    const { pathname } = new URL(imageUrl);
+    const match = pathname.match(/\/(image|raw)\/(upload|authenticated)\/(.+)$/);
+    if (!match) return null;
 
-    let assetPath = parsedUrl.pathname.slice(markerIndex + marker.length);
-    assetPath = assetPath.replace(/^v\d+\//, "");
-    assetPath = assetPath.replace(/^\/+/, "");
+    const assetPath = match[3]
+      .replace(/^s--[^/]+--\//, "")
+      .replace(/^v\d+\//, "")
+      .replace(/^\/+/, "");
     if (!assetPath) return null;
 
-    return assetPath.replace(/\.[a-zA-Z0-9]+$/, "");
+    const resourceType = match[1] as "image" | "raw";
+    const extMatch = assetPath.match(/\.([a-zA-Z0-9]+)$/);
+    return {
+      resourceType,
+      deliveryType: match[2],
+      publicId: resourceType === "image" ? assetPath.replace(/\.[a-zA-Z0-9]+$/, "") : assetPath,
+      format: extMatch ? extMatch[1] : null,
+    };
   } catch {
     return null;
   }
 }
 
 /**
+ * Converte l'URL di una risorsa Cloudinary privata ("authenticated") in un URL di
+ * download firmato a scadenza. Le risorse pubbliche (legacy) vengono restituite invariate.
+ */
+export function getSignedCloudinaryUrl(storedUrl: string | null | undefined, ttlSeconds = 300): string | null {
+  if (!storedUrl) return null;
+  const parsed = parseCloudinaryUrl(storedUrl);
+  if (!parsed || parsed.deliveryType !== "authenticated") return storedUrl;
+
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const publicId = parsed.resourceType === "raw" && parsed.format
+    ? parsed.publicId.replace(/\.[a-zA-Z0-9]+$/, "")
+    : parsed.publicId;
+
+  return cloudinary.utils.private_download_url(publicId, parsed.format ?? "", {
+    resource_type: parsed.resourceType,
+    type: "authenticated",
+    expires_at: expiresAt,
+  });
+}
+
+/**
  * Cancella una risorsa Cloudinary a partire da image URL.
  */
 export async function deleteCloudinaryImageByUrl(imageUrl: string): Promise<boolean> {
-  const publicId = extractCloudinaryPublicIdFromUrl(imageUrl);
-  if (!publicId) return false;
+  const parsed = parseCloudinaryUrl(imageUrl);
+  if (!parsed) return false;
 
   try {
-    const result = await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+    const result = await cloudinary.uploader.destroy(parsed.publicId, {
+      resource_type: parsed.resourceType,
+      type: parsed.deliveryType,
+    });
     const status = (result as { result?: string })?.result;
     return status === "ok" || status === "not found";
   } catch (error) {
-    console.warn("⚠️ Errore cancellazione immagine Cloudinary:", publicId, error);
+    console.warn("⚠️ Errore cancellazione immagine Cloudinary:", parsed.publicId, error);
     return false;
   }
 }

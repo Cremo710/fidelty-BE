@@ -16,7 +16,6 @@ export interface SignalFlag {
     | "DUPLICATE_IMAGE"    // Fase 2 — rosso
     | "MOCK_LOCATION"      // Fase 2 — rosso
     | "DATE_MISMATCH"      // Fase 2 — giallo
-    | "MANUAL_ENTRY"       // Fase 2 — giallo
     | "OCR_LOW_CONFIDENCE";// Fase 2 — giallo
   reason: string;
   /** reject = rosso (rifiuto automatico); review = giallo (coda barista) */
@@ -267,15 +266,6 @@ export class SemaphoreService {
           reason: `Data sullo scontrino (${input.ocrReceiptDate}) non corrisponde a oggi (${todayRome}).`,
         });
       }
-    }
-
-    // MANUAL_ENTRY (giallo): nessuna sessione OCR — solo quando ocr_enabled
-    if (platform.ocrEnabled && input.hasOcrSession === false) {
-      signals.push({
-        code: "MANUAL_ENTRY",
-        severity: "review",
-        reason: "Dati inseriti manualmente. La richiesta richiede conferma del barista.",
-      });
     }
 
     // OCR_LOW_CONFIDENCE (giallo): importo o P.IVA non letti dall'OCR

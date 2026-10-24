@@ -1,12 +1,7 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { pointsRevocationRepository } from "../repositories/pointsRevocationRepository.js";
 import { collectPilotMetrics } from "../scripts/pilotMetrics.js";
-
-/** Simple admin guard: userId must be in the ADMIN_USER_IDS env var (comma-separated). */
-function isAdmin(userId: string): boolean {
-  const adminIds = (process.env.ADMIN_USER_IDS || "").split(",").map((s) => s.trim()).filter(Boolean);
-  return adminIds.includes(userId);
-}
+import { isAdmin } from "../utils/admin.js";
 
 export class AdminController {
   async revokePoints(request: FastifyRequest, reply: FastifyReply) {

@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { requireSecret } from "../utils/env.js";
 
 export interface OfferRedemptionTokenPayload {
   redemptionId: string;
@@ -12,10 +13,8 @@ export interface OfferRedemptionTokenPayload {
 }
 
 class OfferRedemptionTokenService {
-  private readonly secret: string;
-
-  constructor() {
-    this.secret = process.env.OFFER_REDEMPTION_SECRET || process.env.JWT_SECRET || "your-secret-key";
+  private get secret(): string {
+    return requireSecret("OFFER_REDEMPTION_SECRET");
   }
 
   generateToken(payload: Omit<OfferRedemptionTokenPayload, "type" | "exp">, expiresAt: Date): string {

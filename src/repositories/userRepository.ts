@@ -35,6 +35,13 @@ export interface UserBarRankingEntry {
  * Repository pattern per l'accesso ai dati degli utenti
  * Astrae la logica di interazione con il database
  */
+export class EmailExistsError extends Error {
+  readonly code = "EMAIL_EXISTS";
+  constructor() {
+    super("Email già registrata");
+  }
+}
+
 export class UserRepository {
   /**
    * Salva un nuovo utente nel database
@@ -56,23 +63,26 @@ export class UserRepository {
       const query = `
         INSERT INTO utenti (id, public_id, name, email, password, is_email_verified, email_verified_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, false, NULL, CURRENT_TIMESTAMP)
-        ON CONFLICT (email) DO UPDATE SET
-          name = EXCLUDED.name,
-          password = EXCLUDED.password,
-          updated_at = CURRENT_TIMESTAMP
+        ON CONFLICT (email) DO NOTHING
         RETURNING id
       `;
 
       const values = [id, publicId, user.name, user.email, user.password];
       const result = await client.query(query, values);
+      if (result.rows.length === 0) {
+        await client.query("ROLLBACK");
+        throw new EmailExistsError();
+      }
       const userId: string = result.rows[0].id;
 
       await client.query("COMMIT");
-      console.log(`✅ Utente creato/aggiornato con ID: ${userId}`);
+      console.log(`✅ Utente creato con ID: ${userId}`);
       return userId;
     } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("❌ Errore durante la creazione dell'utente:", error);
+      if (!(error instanceof EmailExistsError)) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        console.error("❌ Errore durante la creazione dell'utente:", error);
+      }
       throw error;
     } finally {
       client.release();
@@ -316,23 +326,36 @@ export class UserRepository {
     }
   }
 
-  async consumeEmailVerificationToken(tokenHash: string): Promise<string | null> {
+  async consumeEmailVerificationToken(userId: string, tokenHash: string): Promise<string | null> {
     const query = `
       UPDATE email_verification_tokens
       SET consumed_at = CURRENT_TIMESTAMP
-      WHERE token_hash = $1
+      WHERE user_id = $1
+        AND token_hash = $2
         AND consumed_at IS NULL
         AND expires_at > CURRENT_TIMESTAMP
+        AND attempts < 5
       RETURNING user_id
     `;
 
     try {
-      const result = await databaseService.getPool().query(query, [tokenHash]);
+      const result = await databaseService.getPool().query(query, [userId, tokenHash]);
       return result.rows[0]?.user_id || null;
     } catch (error) {
       console.error("Errore nel consumo del token di verifica email:", error);
       throw error;
     }
+  }
+
+  async recordFailedEmailVerificationAttempt(userId: string): Promise<void> {
+    await databaseService.getPool().query(
+      `
+        UPDATE email_verification_tokens
+        SET attempts = attempts + 1
+        WHERE user_id = $1 AND consumed_at IS NULL
+      `,
+      [userId],
+    );
   }
 
   async invalidateEmailVerificationTokens(userId: string): Promise<void> {

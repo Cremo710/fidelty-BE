@@ -1,8 +1,8 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { businessRequestRepository } from "../repositories/businessRequestRepository.js";
 import { barRepository } from "../repositories/barRepository.js";
-import { userRepository } from "../repositories/userRepository.js";
-import { uploadDocument, uploadOptimizedImage, isDocumentFile, isFileSizeValid, isImageFile } from "../utils/imageUpload.js";
+import { userRepository, EmailExistsError } from "../repositories/userRepository.js";
+import { uploadDocument, uploadOptimizedImage, isDocumentFile, isFileSizeValid, isImageFile, getSignedCloudinaryUrl } from "../utils/imageUpload.js";
 import { databaseService } from "../services/databaseService.js";
 import { emailService } from "../services/emailService.js";
 import { getAuthService } from "../services/authService.js";
@@ -332,10 +332,16 @@ export class BusinessRequestController {
         }
         accountCreated = true;
       } else {
-        // Account esistente: recupera l'id senza sovrascrivere la password (anti-takeover)
+        // Account esistente: richiede la password corretta (anti-takeover)
         const existing = await userRepository.findByEmail(accountEmail);
-        if (!existing) {
-          return reply.status(500).send({ success: false, error: "Errore interno durante il recupero dell'account" });
+        const passwordOk = existing
+          && await getAuthService().verifyPassword(accountPassword, existing.password);
+        if (!existing || !passwordOk) {
+          return reply.status(401).send({
+            success: false,
+            error: "Esiste già un account con questa email. Inserisci la password corretta.",
+            code: "INVALID_CREDENTIALS",
+          });
         }
         userId = existing.id;
         accountAlreadyExists = true;
@@ -368,6 +374,9 @@ export class BusinessRequestController {
         verificationEmailSent,
       });
     } catch (error: any) {
+      if (error instanceof EmailExistsError) {
+        return reply.status(409).send({ success: false, error: "Email già registrata", code: "EMAIL_EXISTS" });
+      }
       console.error("❌ Errore createFromSite:", error);
       return reply.status(500).send({ success: false, error: "Errore durante la creazione della richiesta" });
     }
@@ -376,6 +385,10 @@ export class BusinessRequestController {
   // ---------------------------------------------------------------------------
   // Endpoint admin / lettura
   // ---------------------------------------------------------------------------
+
+  private withSignedDocument<T extends { document_url?: string | null }>(row: T): T {
+    return { ...row, document_url: getSignedCloudinaryUrl(row.document_url ?? null) };
+  }
 
   /**
    * GET /api/business-requests/my
@@ -392,7 +405,7 @@ export class BusinessRequestController {
 
       return reply.send({
         success: true,
-        data: businessRequest,
+        data: businessRequest ? this.withSignedDocument(businessRequest) : businessRequest,
       });
     } catch (error: any) {
       console.error("❌ Errore recupero business request:", error);
@@ -419,7 +432,7 @@ export class BusinessRequestController {
 
       return reply.send({
         success: true,
-        data: requests,
+        data: requests.map((item) => this.withSignedDocument(item)),
       });
     } catch (error: any) {
       console.error("❌ Errore lista business requests:", error);

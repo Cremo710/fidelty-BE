@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import { FastifyRequest, FastifyReply } from "fastify";
 import { getAuthService } from "../services/authService.js";
-import { userRepository } from "../repositories/userRepository.js";
+import { userRepository, EmailExistsError } from "../repositories/userRepository.js";
 import { emailService } from "../services/emailService.js";
 import { databaseService } from "../services/databaseService.js";
 import { saveAndOptimizeImage, isImageFile, isFileSizeValid } from "../utils/imageUpload.js";
@@ -166,6 +166,14 @@ export class AuthController {
         },
       });
     } catch (error) {
+      if (error instanceof EmailExistsError) {
+        return reply.status(409).send({
+          success: false,
+          error: "Email già registrata",
+          code: "EMAIL_EXISTS",
+        });
+      }
+
       console.error("❌ Errore durante la registrazione:", error);
 
       const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
@@ -441,13 +449,21 @@ export class AuthController {
       }
 
       const input = validation.data as VerifyEmailInput;
-      const userId = await userRepository.consumeEmailVerificationToken(hashRawToken(input.token));
+      const invalidCode = () => reply.status(400).send({
+        success: false,
+        error: "Codice di verifica non valido o scaduto",
+        code: "INVALID_EMAIL_VERIFICATION_TOKEN",
+      });
+
+      const user = await userRepository.findByEmail(input.email);
+      if (!user) {
+        return invalidCode();
+      }
+
+      const userId = await userRepository.consumeEmailVerificationToken(user.id, hashRawToken(input.token));
       if (!userId) {
-        return reply.status(400).send({
-          success: false,
-          error: "Codice di verifica non valido o scaduto",
-          code: "INVALID_EMAIL_VERIFICATION_TOKEN",
-        });
+        await userRepository.recordFailedEmailVerificationAttempt(user.id);
+        return invalidCode();
       }
 
       await userRepository.updateUser(userId, {

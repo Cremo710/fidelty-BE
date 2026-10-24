@@ -1,5 +1,6 @@
 import { hash, verify } from "argon2";
 import jwt, { SignOptions, JwtPayload } from "jsonwebtoken";
+import { requireSecret } from "../utils/env.js";
 
 interface JWTPayload {
   userId: string;
@@ -23,11 +24,7 @@ export class AuthService {
       throw new Error("JWT_SECRET non è definito nelle variabili d'ambiente");
     }
     this.jwtSecret = deps.JWT_SECRET;
-    this.refreshTokenSecret = process.env.REFRESH_TOKEN_SECRET || "your-refresh-secret-key";
-    
-    if (!process.env.REFRESH_TOKEN_SECRET) {
-      console.warn("⚠️  REFRESH_TOKEN_SECRET non definito nelle variabili d'ambiente");
-    }
+    this.refreshTokenSecret = requireSecret("REFRESH_TOKEN_SECRET");
   }
 
   /**
@@ -174,7 +171,7 @@ let authServiceInstance: AuthService | null = null;
 export function getAuthService(): AuthService {
   if (!authServiceInstance) {
     authServiceInstance = new AuthService({
-      JWT_SECRET: process.env.JWT_SECRET || "your-secret-key",
+      JWT_SECRET: requireSecret("JWT_SECRET"),
       JWT_EXPIRY: process.env.JWT_EXPIRY || "7d",
     });
   }

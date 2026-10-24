@@ -50,11 +50,14 @@ export class DatabaseService {
       CREATE TABLE IF NOT EXISTS email_verification_tokens (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,
-        token_hash TEXT UNIQUE NOT NULL,
+        token_hash TEXT NOT NULL,
         expires_at TIMESTAMP NOT NULL,
         consumed_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      ALTER TABLE email_verification_tokens DROP CONSTRAINT IF EXISTS email_verification_tokens_token_hash_key;
+      ALTER TABLE email_verification_tokens ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
 
       CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user_id ON email_verification_tokens(user_id);
       CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_hash ON email_verification_tokens(token_hash);
@@ -376,51 +379,6 @@ export class DatabaseService {
         "❌ Errore durante l'inizializzazione delle tabelle:",
         error,
       );
-      throw error;
-    }
-  }
-
-  async saveUser(userData: { name: string; email: string; password: string }): Promise<string> {
-    const client = await this.pool.connect();
-
-    try {
-      await client.query("BEGIN");
-
-      const id = ulid();
-      const publicId = await this.generateUniquePublicId(client);
-      const insertUserQuery = `
-      INSERT INTO utenti (id, public_id, name, email, password, updated_at)
-      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-      ON CONFLICT (email) DO UPDATE SET
-        name = EXCLUDED.name,
-        password = EXCLUDED.password,
-        updated_at = CURRENT_TIMESTAMP
-      RETURNING id
-    `;
-
-      const values = [id, publicId, userData.name, userData.email, userData.password];
-      const result = await client.query(insertUserQuery, values);
-      const userId: string = result.rows[0].id;
-
-      await client.query("COMMIT");
-      console.log(`✅ Utente salvato/aggiornato con ID: ${userId}`);
-      return userId;
-    } catch (error: any) {
-      await client.query("ROLLBACK");
-      console.error("❌ Errore durante il salvataggio dell'utente:", error.message);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async getUserByEmail(email: string): Promise<any> {
-    try {
-      const query = "SELECT * FROM utenti WHERE email = $1";
-      const result = await this.pool.query(query, [email]);
-      return result.rows[0] || null;
-    } catch (error) {
-      console.error("❌ Errore durante il recupero dell'utente:", error);
       throw error;
     }
   }

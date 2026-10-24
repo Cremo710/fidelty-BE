@@ -46,7 +46,7 @@ export async function authenticateToken(
     // Verifica il token
     const payload = authService.verifyToken(token);
 
-    if (!payload) {
+    if (!payload || payload.type !== "access") {
       return reply.status(401).send({
         success: false,
         error: "Token non valido o scaduto",
@@ -57,8 +57,6 @@ export async function authenticateToken(
     // Aggiungi le informazioni dell'utente al request
     request.userId = payload.userId;
     request.userEmail = payload.email;
-
-    console.log(`🔐 Utente autenticato: ${payload.email} (ID: ${payload.userId})`);
   } catch (error) {
     console.error("❌ Errore durante l'autenticazione:", error);
     return reply.status(500).send({

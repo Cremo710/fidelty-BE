@@ -48,6 +48,11 @@ export const emailRequestSchema = z.object({
 });
 
 export const verifyEmailSchema = z.object({
+  email: z
+    .string()
+    .email("Email non valida")
+    .toLowerCase()
+    .trim(),
   token: z
     .string()
     .regex(/^\d{6}$/, "Il codice di verifica deve contenere 6 cifre")
