@@ -1,3 +1,4 @@
+import { randomInt } from "crypto";
 import pkg from "pg";
 const { Pool } = pkg;
 import { ulid } from "ulid";
@@ -20,7 +21,7 @@ export class DatabaseService {
     this.pool = new Pool({
       connectionString: databaseUrl,
       ssl: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: true,
       },
     });
 
@@ -104,7 +105,7 @@ export class DatabaseService {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       let code = "FU-";
       for (let i = 0; i < 5; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
+        code += chars.charAt(randomInt(chars.length));
       }
       const check = await client.query(
         "SELECT 1 FROM utenti WHERE public_id = $1 LIMIT 1",

@@ -1,3 +1,4 @@
+import { randomInt } from "crypto";
 /**
  * Migrazione: genera un public_id (FU-XXXXX) per tutti gli utenti
  * che ancora non ne hanno uno.
@@ -21,7 +22,7 @@ const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 function generateCode(): string {
   let code = "FU-";
   for (let i = 0; i < 5; i++) {
-    code += CHARS.charAt(Math.floor(Math.random() * CHARS.length));
+    code += CHARS.charAt(randomInt(CHARS.length));
   }
   return code;
 }

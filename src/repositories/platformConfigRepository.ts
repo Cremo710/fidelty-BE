@@ -30,6 +30,13 @@ const HARDCODED_DEFAULTS: PlatformConfig = {
   mockLocationReject: true,
 };
 
+/** Accetta anche 0; usa il default solo se il valore è assente o non numerico. */
+function numberOr(value: unknown, fallback: number): number {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export class PlatformConfigRepository {
   private cache: PlatformConfig | null = null;
   private cacheExpiresAt = 0;
@@ -49,16 +56,16 @@ export class PlatformConfigRepository {
       }
 
       const config: PlatformConfig = {
-        rateLimitPerUserPerBarPerDay:  Number(map.get("rate_limit_per_user_per_bar_per_day"))  || HARDCODED_DEFAULTS.rateLimitPerUserPerBarPerDay,
-        pointsPerEuro:                 Number(map.get("points_per_euro"))                       || HARDCODED_DEFAULTS.pointsPerEuro,
-        anomalyMultiplier:             Number(map.get("anomaly_multiplier"))                    || HARDCODED_DEFAULTS.anomalyMultiplier,
-        youngAccountMinDays:           Number(map.get("young_account_min_days"))                || HARDCODED_DEFAULTS.youngAccountMinDays,
-        youngAccountMinRequests:       Number(map.get("young_account_min_requests"))            || HARDCODED_DEFAULTS.youngAccountMinRequests,
-        youngAccountMaxAmount:         Number(map.get("young_account_max_amount"))              || HARDCODED_DEFAULTS.youngAccountMaxAmount,
-        consumptionDetailBonusPoints:  Number(map.get("consumption_detail_bonus_points"))       || HARDCODED_DEFAULTS.consumptionDetailBonusPoints,
-        consumptionDetailTolerancePct: Number(map.get("consumption_detail_tolerance_pct"))      || HARDCODED_DEFAULTS.consumptionDetailTolerancePct,
-        maxPointsPerUserPerDay:        Number(map.get("max_points_per_user_per_day"))           || HARDCODED_DEFAULTS.maxPointsPerUserPerDay,
-        maxPointsPerBarPerDay:         Number(map.get("max_points_per_bar_per_day"))            || HARDCODED_DEFAULTS.maxPointsPerBarPerDay,
+        rateLimitPerUserPerBarPerDay:  numberOr(map.get("rate_limit_per_user_per_bar_per_day"), HARDCODED_DEFAULTS.rateLimitPerUserPerBarPerDay),
+        pointsPerEuro:                 numberOr(map.get("points_per_euro"), HARDCODED_DEFAULTS.pointsPerEuro),
+        anomalyMultiplier:             numberOr(map.get("anomaly_multiplier"), HARDCODED_DEFAULTS.anomalyMultiplier),
+        youngAccountMinDays:           numberOr(map.get("young_account_min_days"), HARDCODED_DEFAULTS.youngAccountMinDays),
+        youngAccountMinRequests:       numberOr(map.get("young_account_min_requests"), HARDCODED_DEFAULTS.youngAccountMinRequests),
+        youngAccountMaxAmount:         numberOr(map.get("young_account_max_amount"), HARDCODED_DEFAULTS.youngAccountMaxAmount),
+        consumptionDetailBonusPoints:  numberOr(map.get("consumption_detail_bonus_points"), HARDCODED_DEFAULTS.consumptionDetailBonusPoints),
+        consumptionDetailTolerancePct: numberOr(map.get("consumption_detail_tolerance_pct"), HARDCODED_DEFAULTS.consumptionDetailTolerancePct),
+        maxPointsPerUserPerDay:        numberOr(map.get("max_points_per_user_per_day"), HARDCODED_DEFAULTS.maxPointsPerUserPerDay),
+        maxPointsPerBarPerDay:         numberOr(map.get("max_points_per_bar_per_day"), HARDCODED_DEFAULTS.maxPointsPerBarPerDay),
         mockLocationReject:             map.has("mock_location_reject") ? Boolean(map.get("mock_location_reject")) : HARDCODED_DEFAULTS.mockLocationReject,
       };
 

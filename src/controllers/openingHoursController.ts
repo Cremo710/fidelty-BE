@@ -37,8 +37,8 @@ export class OpeningHoursController {
         message: "Orari di apertura aggiornati",
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "SET_HOURS_ERROR" });
+      console.error("❌ Errore openingHoursController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "SET_HOURS_ERROR" });
     }
   }
 
@@ -68,8 +68,8 @@ export class OpeningHoursController {
         })),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "GET_HOURS_ERROR" });
+      console.error("❌ Errore openingHoursController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "GET_HOURS_ERROR" });
     }
   }
 
@@ -94,8 +94,8 @@ export class OpeningHoursController {
         })),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "GET_HOURS_ERROR" });
+      console.error("❌ Errore openingHoursController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "GET_HOURS_ERROR" });
     }
   }
 }

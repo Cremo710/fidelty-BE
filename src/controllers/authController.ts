@@ -176,11 +176,11 @@ export class AuthController {
 
       console.error("❌ Errore durante la registrazione:", error);
 
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      console.error("❌ Errore authController:", error);
 
       return reply.status(500).send({
         success: false,
-        error: errorMessage,
+        error: "Errore interno del server",
         code: "REGISTRATION_ERROR",
       });
     }
@@ -275,11 +275,11 @@ export class AuthController {
     } catch (error) {
       console.error("❌ Errore durante il login:", error);
 
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      console.error("❌ Errore authController:", error);
 
       return reply.status(500).send({
         success: false,
-        error: errorMessage,
+        error: "Errore interno del server",
         code: "LOGIN_ERROR",
       });
     }
@@ -357,11 +357,11 @@ export class AuthController {
     } catch (error) {
       console.error("❌ Errore durante il refresh token:", error);
 
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      console.error("❌ Errore authController:", error);
 
       return reply.status(500).send({
         success: false,
-        error: errorMessage,
+        error: "Errore interno del server",
         code: "REFRESH_TOKEN_ERROR",
       });
     }
@@ -431,8 +431,8 @@ export class AuthController {
         message: "Se l'account esiste e non è verificato, abbiamo inviato una nuova email di verifica",
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "EMAIL_VERIFICATION_RESEND_ERROR" });
+      console.error("❌ Errore authController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "EMAIL_VERIFICATION_RESEND_ERROR" });
     }
   }
 
@@ -477,8 +477,8 @@ export class AuthController {
         message: "Email verificata con successo",
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "EMAIL_VERIFICATION_ERROR" });
+      console.error("❌ Errore authController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "EMAIL_VERIFICATION_ERROR" });
     }
   }
 
@@ -525,8 +525,8 @@ export class AuthController {
       });
     } catch (error) {
       console.error("❌ requestPasswordReset failed:", error);
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "PASSWORD_RESET_REQUEST_ERROR" });
+      console.error("❌ Errore authController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "PASSWORD_RESET_REQUEST_ERROR" });
     }
   }
 
@@ -563,8 +563,8 @@ export class AuthController {
         message: "Password aggiornata con successo",
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "PASSWORD_RESET_CONFIRM_ERROR" });
+      console.error("❌ Errore authController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "PASSWORD_RESET_CONFIRM_ERROR" });
     }
   }
 
@@ -746,8 +746,8 @@ export class AuthController {
       });
     } catch (error) {
       console.error("❌ Errore upload foto profilo:", error);
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "UPLOAD_ERROR" });
+      console.error("❌ Errore authController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "UPLOAD_ERROR" });
     }
   }
 
@@ -781,8 +781,8 @@ export class AuthController {
 
       return reply.status(200).send({ success: true });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "PUSH_TOKEN_ERROR" });
+      console.error("❌ Errore authController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "PUSH_TOKEN_ERROR" });
     }
   }
 }

@@ -460,7 +460,7 @@ class EmailService {
     const safeRequester = escapeHtml(input.requesterName);
     const amountStr = input.amount.toFixed(2).replace(".", ",");
 
-    const subject = `Nuova richiesta consumazione — ${safeBar}`;
+    const subject = `Nuova richiesta consumazione — ${input.barName}`;
     const html = `
       <div style="margin:0;padding:32px;background:#f5f2fb;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#1f1730;">
         <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 12px 40px rgba(44,28,84,0.08);">

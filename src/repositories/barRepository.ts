@@ -101,26 +101,32 @@ export interface BarRankingEntry {
   position: number;
 }
 
+/** "Mario Rossi" -> "Mario R." (le classifiche non espongono il nome completo degli altri utenti) */
+function abbreviateName(fullName: string | null | undefined): string {
+  const parts = String(fullName ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "Utente";
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}.`;
+}
+
 /**
  * Repository pattern per l'accesso ai dati dei bar
  * Astrae la logica di interazione con il database
  */
 export class BarRepository {
-  private async hasGeoColumns(): Promise<boolean> {
-    try {
-      const query = `
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_name = 'bars'
-          AND column_name IN ('latitude', 'longitude')
-      `;
-      const result = await databaseService.getPool().query(query);
-      const columns = new Set(result.rows.map((row: any) => row.column_name));
-      return columns.has("latitude") && columns.has("longitude");
-    } catch (error) {
-      console.warn("⚠️ Impossibile verificare colonne geografiche bars:", error);
-      return false;
-    }
+  /** Bar attivi senza coordinate (da geocodificare una sola volta e salvare). */
+  async findBarsMissingCoordinates(): Promise<Array<{ id: string; address: string }>> {
+    const result = await databaseService.getPool().query(
+      "SELECT id, address FROM bars WHERE deleted_at IS NULL AND (latitude IS NULL OR longitude IS NULL) AND address IS NOT NULL",
+    );
+    return result.rows;
+  }
+
+  async setCoordinates(id: string, latitude: number, longitude: number): Promise<void> {
+    await databaseService.getPool().query(
+      "UPDATE bars SET latitude = $2, longitude = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+      [id, latitude, longitude],
+    );
   }
 
   /**
@@ -273,8 +279,6 @@ export class BarRepository {
     updated_at: Date;
   }>> {
     try {
-      const includeGeoColumns = await this.hasGeoColumns();
-
       const query = `
         SELECT
           id,
@@ -287,8 +291,8 @@ export class BarRepository {
           image,
           logo,
           description,
-          ${includeGeoColumns ? "latitude" : "NULL::double precision AS latitude"},
-          ${includeGeoColumns ? "longitude" : "NULL::double precision AS longitude"},
+          latitude,
+          longitude,
           created_at,
           updated_at
         FROM bars
@@ -365,19 +369,20 @@ export class BarRepository {
       ),
     ]);
 
-    return {
-      topEntries: topEntriesResult.rows.map((row) => ({
+    const toPublicEntry = (row: any) => {
+      const isCurrentUser = row.userId === currentUserId;
+      return {
         ...row,
+        name: isCurrentUser ? row.name : abbreviateName(row.name),
+        publicId: isCurrentUser ? row.publicId : null,
         points: Number(row.points) || 0,
         position: Number(row.position) || 0,
-      })),
-      currentUserEntry: currentUserResult.rows[0]
-        ? {
-            ...currentUserResult.rows[0],
-            points: Number(currentUserResult.rows[0].points) || 0,
-            position: Number(currentUserResult.rows[0].position) || 0,
-          }
-        : null,
+      };
+    };
+
+    return {
+      topEntries: topEntriesResult.rows.map(toPublicEntry),
+      currentUserEntry: currentUserResult.rows[0] ? toPublicEntry(currentUserResult.rows[0]) : null,
       participantsCount: Number(participantsResult.rows[0]?.total) || 0,
     };
   }

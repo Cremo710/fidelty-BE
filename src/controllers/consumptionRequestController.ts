@@ -11,7 +11,7 @@ import { platformConfigRepository } from "../repositories/platformConfigReposito
 import { semaphoreService } from "../services/semaphoreService.js";
 import { databaseService } from "../services/databaseService.js";
 import { extractReceiptFields } from "../services/visionOcrService.js";
-import { deleteCloudinaryImageByUrl, getSignedCloudinaryUrl, uploadOptimizedImage } from "../utils/imageUpload.js";
+import { deleteCloudinaryImageByUrl, getSignedCloudinaryUrl, uploadReceiptImage } from "../utils/imageUpload.js";
 
 const RECEIPT_IMAGE_RETENTION_DAYS = Number(process.env.RECEIPT_IMAGE_RETENTION_DAYS || 90);
 
@@ -297,8 +297,8 @@ export class ConsumptionRequestController {
         data: this.buildRequesterActivityFeed(requests, offerRedemptions),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_LIST_ERROR" });
+      console.error("❌ Errore consumptionRequestController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CONSUMPTION_REQUEST_LIST_ERROR" });
     }
   }
 
@@ -340,10 +340,10 @@ export class ConsumptionRequestController {
         },
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      console.error("❌ Errore consumptionRequestController:", error);
       return reply.status(500).send({
         success: false,
-        error: errorMessage,
+        error: "Errore interno del server",
         code: "BAR_LOOKUP_ERROR",
       });
     }
@@ -463,7 +463,7 @@ export class ConsumptionRequestController {
       // ── Upload Cloudinary ──────────────────────────────────────────────────
       let imageUrl: string | null = null;
       try {
-        const uploadResult = await uploadOptimizedImage(imageBuffer, `receipt-${imageSha256.slice(0, 12)}.jpg`, "fidelty/receipts", "authenticated");
+        const uploadResult = await uploadReceiptImage(imageBuffer, `receipt-${imageSha256.slice(0, 12)}.jpg`, "fidelty/receipts", "authenticated");
         imageUrl = uploadResult.secure_url;
       } catch (uploadErr) {
         console.warn("⚠️ Upload Cloudinary scontrino fallito (non bloccante):", (uploadErr as Error).message);
@@ -513,8 +513,8 @@ export class ConsumptionRequestController {
         },
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "OCR_UPLOAD_ERROR" });
+      console.error("❌ Errore consumptionRequestController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "OCR_UPLOAD_ERROR" });
     }
   }
 
@@ -828,8 +828,8 @@ export class ConsumptionRequestController {
         },
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_ERROR" });
+      console.error("❌ Errore consumptionRequestController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CONSUMPTION_REQUEST_ERROR" });
     }
   }
 
@@ -852,8 +852,8 @@ export class ConsumptionRequestController {
         data: requests.map((row) => this.mapRequestResponse(row)),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_LIST_ERROR" });
+      console.error("❌ Errore consumptionRequestController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CONSUMPTION_REQUEST_LIST_ERROR" });
     }
   }
 
@@ -877,8 +877,8 @@ export class ConsumptionRequestController {
         data: requests.map((row) => this.mapRequestResponse(row)),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_LIST_ERROR" });
+      console.error("❌ Errore consumptionRequestController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CONSUMPTION_REQUEST_LIST_ERROR" });
     }
   }
 
@@ -959,7 +959,8 @@ export class ConsumptionRequestController {
         return reply.status(409).send({ success: false, error: "Richiesta già elaborata", code: errorMessage });
       }
 
-      return reply.status(500).send({ success: false, error: errorMessage, code: "CONSUMPTION_REQUEST_UPDATE_ERROR" });
+      console.error("❌ Errore aggiornamento richiesta consumo:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CONSUMPTION_REQUEST_UPDATE_ERROR" });
     }
   }
   async manualCredit(request: FastifyRequest, reply: FastifyReply) {
@@ -1105,8 +1106,8 @@ export class ConsumptionRequestController {
         },
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "MANUAL_CREDIT_ERROR" });
+      console.error("❌ Errore consumptionRequestController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "MANUAL_CREDIT_ERROR" });
     }
   }
 }

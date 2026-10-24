@@ -29,7 +29,7 @@ export interface BusinessRequestDTO {
   opening_hours_json: unknown[];
   latitude: number | null;
   longitude: number | null;
-  status: "pending" | "CONFIRMED" | "REFUSED";
+  status: "pending" | "approved" | "rejected";
   rejection_reason: string | null;
   reviewed_at: Date | null;
   created_at: Date;
@@ -156,7 +156,7 @@ export class BusinessRequestRepository {
 
   async updateStatus(
     id: string,
-    status: "CONFIRMED" | "REFUSED",
+    status: "approved" | "rejected",
     rejectionReason?: string,
     client?: PoolClient
   ): Promise<BusinessRequestDTO | null> {

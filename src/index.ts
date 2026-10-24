@@ -4,6 +4,7 @@ import cors from "@fastify/cors";
 import { config } from "dotenv";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
+import { backfillBarCoordinates } from "./utils/geocode.js";
 import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
 import { loyaltyCardController } from "./controllers/loyaltyCardController.js";
@@ -176,7 +177,7 @@ async function createServer(): Promise<FastifyInstance> {
   // ==================== USER SEARCH ENDPOINTS ====================
 
   // Search user by public_id (protected route)
-  app.get("/api/users/search", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.get("/api/users/search", { onRequest: [authenticateToken], config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
     return authController.searchByPublicId(request, reply);
   });
 
@@ -512,6 +513,11 @@ async function startServer(): Promise<FastifyInstance> {
     } catch (err) {
       console.warn("⚠️ Backfill public_id fallito (non bloccante):", err);
     }
+
+    // Geocodifica una tantum dei bar senza coordinate (evita il geocoding a ogni GET /api/bars)
+    backfillBarCoordinates()
+      .then((count) => count > 0 && console.log(`📍 Coordinate salvate per ${count} bar`))
+      .catch((err) => console.warn("⚠️ Backfill coordinate bar fallito (non bloccante):", err));
 
     // Setup hooks
     setupHooks(app);

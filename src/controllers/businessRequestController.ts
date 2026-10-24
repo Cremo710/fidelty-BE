@@ -607,7 +607,7 @@ export class BusinessRequestController {
             openingHours,
           });
 
-          const updated = await businessRequestRepository.updateStatus(id, "CONFIRMED", undefined, client);
+          const updated = await businessRequestRepository.updateStatus(id, "approved", undefined, client);
 
           await client.query("COMMIT");
 
@@ -644,7 +644,7 @@ export class BusinessRequestController {
         }
       }
 
-      const updated = await businessRequestRepository.updateStatus(id, "REFUSED", rejectionReason);
+      const updated = await businessRequestRepository.updateStatus(id, "rejected", rejectionReason);
 
       let emailResult = null;
       if (recipientEmail) {

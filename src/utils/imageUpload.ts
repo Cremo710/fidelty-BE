@@ -79,6 +79,74 @@ export async function uploadOptimizedImage(
 }
 
 /**
+ * Carica la foto di uno scontrino: lato lungo fino a 1200 px senza ritaglio, JPEG compresso.
+ */
+export async function uploadReceiptImage(
+  bufferFile: Buffer,
+  filename: string,
+  folder: string = "fidelty/receipts",
+  deliveryType: "upload" | "authenticated" = "authenticated"
+): Promise<{ secure_url: string; public_id: string }> {
+  try {
+    const optimizedBuffer = await sharp(bufferFile)
+      .rotate()
+      .resize({ width: 1200, withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+
+    return await uploadBuffer(optimizedBuffer, filename.replace(/\.[a-zA-Z0-9]+$/, "") + ".jpg", folder, "image", deliveryType);
+  } catch (error) {
+    console.error("❌ Errore nel caricamento dello scontrino su Cloudinary:", error);
+    throw new Error("Impossibile caricare l'immagine");
+  }
+}
+
+function uploadBuffer(
+  buffer: Buffer,
+  filename: string,
+  folder: string,
+  resourceType: "image" | "raw",
+  deliveryType: "upload" | "authenticated"
+): Promise<{ secure_url: string; public_id: string }> {
+  return new Promise((resolve, reject) => {
+    const safeName = filename.replace(/[^a-zA-Z0-9_.-]/g, "_");
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder,
+        public_id: `${Date.now()}-${safeName}`,
+        resource_type: resourceType,
+        type: deliveryType,
+        overwrite: false,
+      },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result as { secure_url: string; public_id: string });
+      }
+    );
+    uploadStream.end(buffer);
+  });
+}
+
+/** Riconosce il tipo reale dal contenuto (magic bytes), ignorando il MIME dichiarato. */
+export function detectFileKind(buffer: Buffer): "png" | "jpeg" | "webp" | "pdf" | null {
+  if (!buffer || buffer.length < 12) return null;
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "jpeg";
+  if (buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") return "webp";
+  if (buffer.subarray(0, 5).toString("ascii") === "%PDF-") return "pdf";
+  return null;
+}
+
+export function hasImageSignature(buffer: Buffer): boolean {
+  const kind = detectFileKind(buffer);
+  return kind === "png" || kind === "jpeg" || kind === "webp";
+}
+
+export function hasDocumentSignature(buffer: Buffer): boolean {
+  return detectFileKind(buffer) !== null;
+}
+
+/**
  * Carica un documento (immagine o PDF) su Cloudinary senza ottimizzazione sharp
  */
 export async function uploadDocument(
@@ -87,27 +155,13 @@ export async function uploadDocument(
   mimeType: string,
   folder: string = "fidelty/business_docs"
 ): Promise<{ secure_url: string; public_id: string }> {
-  try {
-    const resourceType = mimeType === "application/pdf" ? "raw" as const : "image" as const;
+  if (!hasDocumentSignature(bufferFile)) {
+    throw new Error("Il contenuto del file non corrisponde a un'immagine o a un PDF");
+  }
 
-    const result = await new Promise<{ secure_url: string; public_id: string }>((resolve, reject) => {
-      const timestamp = Date.now();
-      const safeName = filename.replace(/[^a-zA-Z0-9_.-]/g, "_");
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder,
-          public_id: `${timestamp}-${safeName}`,
-          resource_type: resourceType,
-          type: "authenticated",
-          overwrite: false,
-        },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result as { secure_url: string; public_id: string });
-        }
-      );
-      uploadStream.end(bufferFile);
-    });
+  try {
+    const resourceType = detectFileKind(bufferFile) === "pdf" || mimeType === "application/pdf" ? "raw" as const : "image" as const;
+    const result = await uploadBuffer(bufferFile, filename, folder, resourceType, "authenticated");
 
     console.log(`✅ Documento caricato su Cloudinary: ${result.secure_url}`);
     return result;

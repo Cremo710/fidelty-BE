@@ -47,7 +47,8 @@ export class AdminController {
 
       return reply.status(201).send({ success: true, data: revocation });
     } catch (error) {
-      return reply.status(500).send({ success: false, error: (error as Error).message, code: "REVOKE_POINTS_ERROR" });
+      console.error("❌ Errore revoca punti:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "REVOKE_POINTS_ERROR" });
     }
   }
 
@@ -65,7 +66,8 @@ export class AdminController {
       const metrics = await collectPilotMetrics();
       return reply.status(200).send({ success: true, data: metrics });
     } catch (error) {
-      return reply.status(500).send({ success: false, error: (error as Error).message, code: "PILOT_METRICS_ERROR" });
+      console.error("❌ Errore metriche pilota:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "PILOT_METRICS_ERROR" });
     }
   }
 }

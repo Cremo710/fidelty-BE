@@ -2,7 +2,7 @@ import { FastifyRequest, FastifyReply } from "fastify";
 import { barRepository } from "../repositories/barRepository.js";
 import { offerRepository } from "../repositories/offerRepository.js";
 import { offerNotificationService } from "../services/offerNotificationService.js";
-import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
+import { resolveOwnedBarForRequest, isBarSelectionMissing } from "../utils/ownedBarResolver.js";
 import {
   validateCreateOfferInput,
   validateUpdateOfferInput,
@@ -49,8 +49,8 @@ export class OfferController {
         data: { id: offerId },
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "CREATE_ERROR" });
+      console.error("❌ Errore offerController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CREATE_ERROR" });
     }
   }
 
@@ -88,8 +88,8 @@ export class OfferController {
         })),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "LIST_ERROR" });
+      console.error("❌ Errore offerController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "LIST_ERROR" });
     }
   }
 
@@ -124,8 +124,8 @@ export class OfferController {
           })),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "LIST_ERROR" });
+      console.error("❌ Errore offerController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "LIST_ERROR" });
     }
   }
 
@@ -163,8 +163,8 @@ export class OfferController {
 
       return reply.status(200).send({ success: true, message: "Offerta aggiornata" });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "UPDATE_ERROR" });
+      console.error("❌ Errore offerController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "UPDATE_ERROR" });
     }
   }
 
@@ -180,6 +180,10 @@ export class OfferController {
 
       const { id } = request.params as { id: string };
 
+      if (await isBarSelectionMissing(request)) {
+        return reply.status(400).send({ success: false, error: "Specifica il bar con l'header X-Bar-Id", code: "BAR_ID_REQUIRED" });
+      }
+
       const bar = await resolveOwnedBarForRequest(request);
       if (!bar) {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
@@ -192,8 +196,8 @@ export class OfferController {
 
       return reply.status(200).send({ success: true, message: "Offerta eliminata" });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "DELETE_ERROR" });
+      console.error("❌ Errore offerController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "DELETE_ERROR" });
     }
   }
 }

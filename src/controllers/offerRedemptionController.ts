@@ -80,8 +80,8 @@ export class OfferRedemptionController {
         },
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "REDEMPTION_CONTEXT_ERROR" });
+      console.error("❌ Errore offerRedemptionController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "REDEMPTION_CONTEXT_ERROR" });
     }
   }
 
@@ -237,8 +237,8 @@ export class OfferRedemptionController {
       });
     } catch (error) {
       await client.query("ROLLBACK");
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "CREATE_REDEMPTION_ERROR" });
+      console.error("❌ Errore offerRedemptionController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CREATE_REDEMPTION_ERROR" });
     } finally {
       client.release();
     }
@@ -273,8 +273,8 @@ export class OfferRedemptionController {
         data: serializeRedemptionStatus(redemption),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "REDEMPTION_STATUS_ERROR" });
+      console.error("❌ Errore offerRedemptionController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "REDEMPTION_STATUS_ERROR" });
     }
   }
 
@@ -400,8 +400,8 @@ export class OfferRedemptionController {
       });
     } catch (error) {
       await client.query("ROLLBACK");
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "VALIDATE_REDEMPTION_ERROR" });
+      console.error("❌ Errore offerRedemptionController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "VALIDATE_REDEMPTION_ERROR" });
     } finally {
       client.release();
     }

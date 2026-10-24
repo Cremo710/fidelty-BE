@@ -45,11 +45,11 @@ class LoyaltyCardController {
       });
     } catch (error) {
       console.error("❌ Errore durante il recupero delle tessere:", error);
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
+      console.error("❌ Errore loyaltyCardController:", error);
 
       return reply.status(500).send({
         success: false,
-        error: errorMessage,
+        error: "Errore interno del server",
         code: "CARDS_FETCH_ERROR",
       });
     }

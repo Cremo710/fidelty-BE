@@ -21,3 +21,16 @@ export async function resolveOwnedBarForRequest(request: FastifyRequest): Promis
 
   return barRepository.findByUserId(userId);
 }
+
+/**
+ * Per azioni distruttive: true se l'utente ha più bar e non ha indicato quale con X-Bar-Id.
+ */
+export async function isBarSelectionMissing(request: FastifyRequest): Promise<boolean> {
+  const userId = (request as any).userId;
+  if (!userId || request.headers["x-bar-id"]) {
+    return false;
+  }
+
+  const ownedBars = await barRepository.findAllByUserId(userId);
+  return ownedBars.length > 1;
+}

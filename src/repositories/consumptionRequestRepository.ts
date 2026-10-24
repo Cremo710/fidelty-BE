@@ -24,7 +24,7 @@ export interface ConsumptionRequestDTO {
   receipt_code_block1: string | null;
   receipt_code_block2: string | null;
   receipt_submitted_at: Date | null;
-  semaphore_status: "green" | "yellow" | null;
+  semaphore_status: "green" | "yellow" | "red" | null;
   signal_flags: SignalFlag[];
   retroactive_flagged: boolean;
   created_at: Date;

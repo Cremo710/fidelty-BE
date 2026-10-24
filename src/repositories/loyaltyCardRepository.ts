@@ -96,19 +96,7 @@ export class LoyaltyCardRepository {
    */
   async findByUserId(userId: string): Promise<LoyaltyCardWithBar[]> {
     try {
-      // Verifica se le colonne geo esistono (come fa barRepository)
-      let geoSelect = "NULL::double precision AS latitude, NULL::double precision AS longitude";
-      try {
-        const colCheck = await databaseService.getPool().query(`
-          SELECT column_name FROM information_schema.columns
-          WHERE table_name = 'bars' AND column_name IN ('latitude', 'longitude')
-        `);
-        const cols = new Set(colCheck.rows.map((r: any) => r.column_name));
-        if (cols.has("latitude") && cols.has("longitude")) {
-          geoSelect = "b.latitude, b.longitude";
-        }
-      } catch { /* fallback: NULL */ }
-
+      // Colonne geo garantite dalle migration (nessun controllo su information_schema)
       const query = `
         SELECT
           lc.id,
@@ -120,7 +108,8 @@ export class LoyaltyCardRepository {
           b.image AS cover_image,
           b.description,
           b.address,
-          ${geoSelect},
+          b.latitude,
+          b.longitude,
           lc.points AS total_points,
           lc.lifetime_points,
           (b.deleted_at IS NOT NULL) AS bar_deleted,

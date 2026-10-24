@@ -1,6 +1,18 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { barConfigRepository } from "../repositories/barConfigRepository.js";
 import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
+
+const barConfigUpdateSchema = z
+  .object({
+    gpsRadiusMeters: z.number({ invalid_type_error: "gpsRadiusMeters deve essere un numero" }).min(10, "gpsRadiusMeters deve essere tra 10 e 5000 m").max(5000, "gpsRadiusMeters deve essere tra 10 e 5000 m"),
+    autoCreditEnabled: z.boolean({ invalid_type_error: "autoCreditEnabled deve essere booleano" }),
+    capEnabled: z.boolean({ invalid_type_error: "capEnabled deve essere booleano" }),
+    capAmount: z.number({ invalid_type_error: "capAmount deve essere un numero" }).positive("capAmount deve essere maggiore di 0").max(10000, "capAmount troppo alto"),
+    anomalyEnabled: z.boolean({ invalid_type_error: "anomalyEnabled deve essere booleano" }),
+    youngAccountEnabled: z.boolean({ invalid_type_error: "youngAccountEnabled deve essere booleano" }),
+  })
+  .partial();
 
 export class BarConfigController {
   async getConfig(request: FastifyRequest, reply: FastifyReply) {
@@ -18,7 +30,8 @@ export class BarConfigController {
 
       return reply.status(200).send({ success: true, data: cfg });
     } catch (error) {
-      return reply.status(500).send({ success: false, error: (error as Error).message, code: "BAR_CONFIG_GET_ERROR" });
+      console.error("❌ Errore lettura configurazione bar:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "BAR_CONFIG_GET_ERROR" });
     }
   }
 
@@ -33,28 +46,22 @@ export class BarConfigController {
         return reply.status(404).send({ success: false, error: "Bar non trovato", code: "BAR_NOT_FOUND" });
       }
 
-      const body = (request.body as {
-        gpsRadiusMeters?: number;
-        autoCreditEnabled?: boolean;
-        capEnabled?: boolean;
-        capAmount?: number;
-        anomalyEnabled?: boolean;
-        youngAccountEnabled?: boolean;
-      } | undefined) || {};
-
-      // Basic validation
-      if (body.gpsRadiusMeters !== undefined && (body.gpsRadiusMeters < 10 || body.gpsRadiusMeters > 5000)) {
-        return reply.status(400).send({ success: false, error: "gpsRadiusMeters deve essere tra 10 e 5000 m", code: "INVALID_GPS_RADIUS" });
-      }
-      if (body.capAmount !== undefined && body.capAmount <= 0) {
-        return reply.status(400).send({ success: false, error: "capAmount deve essere maggiore di 0", code: "INVALID_CAP_AMOUNT" });
+      const parsed = barConfigUpdateSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({
+          success: false,
+          error: parsed.error.errors[0]?.message ?? "Configurazione non valida",
+          code: "INVALID_BAR_CONFIG",
+          details: parsed.error.errors.map((e) => ({ field: e.path.join("."), message: e.message })),
+        });
       }
 
-      const updated = await barConfigRepository.upsert(bar.id, body);
+      const updated = await barConfigRepository.upsert(bar.id, parsed.data);
 
       return reply.status(200).send({ success: true, data: updated });
     } catch (error) {
-      return reply.status(500).send({ success: false, error: (error as Error).message, code: "BAR_CONFIG_UPDATE_ERROR" });
+      console.error("❌ Errore aggiornamento configurazione bar:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "BAR_CONFIG_UPDATE_ERROR" });
     }
   }
 }

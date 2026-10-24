@@ -1,5 +1,6 @@
 import { FastifyRequest, FastifyReply } from "fastify";
 import { barRepository } from "../repositories/barRepository.js";
+import { platformConfigRepository } from "../repositories/platformConfigRepository.js";
 import {
   validateBarRegistrationInput,
   validateCardConfigInput,
@@ -11,7 +12,7 @@ import { offerRepository } from "../repositories/offerRepository.js";
 import { openingHoursRepository } from "../repositories/openingHoursRepository.js";
 import { validateCreateOfferInput } from "../validators/offerValidator.js";
 import { validateSetOpeningHoursInput } from "../validators/openingHoursValidator.js";
-import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
+import { resolveOwnedBarForRequest, isBarSelectionMissing } from "../utils/ownedBarResolver.js";
 
 /**
  * Interfaccia per la risposta di Google Geocoding
@@ -232,8 +233,8 @@ export class BarController {
         },
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "UPDATE_ERROR" });
+      console.error("❌ Errore barController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "UPDATE_ERROR" });
     }
   }
 
@@ -257,8 +258,8 @@ export class BarController {
         data: this.serializeBar(bar),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "RETRIEVAL_ERROR" });
+      console.error("❌ Errore barController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "RETRIEVAL_ERROR" });
     }
   }
 
@@ -276,8 +277,8 @@ export class BarController {
         data: bars.map((bar) => this.serializeBar(bar)),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "RETRIEVAL_ERROR" });
+      console.error("❌ Errore barController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "RETRIEVAL_ERROR" });
     }
   }
 
@@ -300,8 +301,8 @@ export class BarController {
         data: dashboardStats,
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "DASHBOARD_STATS_ERROR" });
+      console.error("❌ Errore barController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "DASHBOARD_STATS_ERROR" });
     }
   }
 
@@ -431,8 +432,8 @@ export class BarController {
         data: this.serializeBar(updatedBar),
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "UPDATE_ERROR" });
+      console.error("❌ Errore barController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "UPDATE_ERROR" });
     }
   }
 
@@ -445,6 +446,10 @@ export class BarController {
       const userId = (request as any).userId;
       if (!userId) {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
+      }
+
+      if (await isBarSelectionMissing(request)) {
+        return reply.status(400).send({ success: false, error: "Specifica il bar con l'header X-Bar-Id", code: "BAR_ID_REQUIRED" });
       }
 
       const bar = await resolveOwnedBarForRequest(request);
@@ -462,8 +467,8 @@ export class BarController {
         message: "Iscrizione bar eliminata con successo",
       });
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Errore sconosciuto";
-      return reply.status(500).send({ success: false, error: errorMessage, code: "DELETE_ERROR" });
+      console.error("❌ Errore barController.ts:", error);
+      return reply.status(500).send({ success: false, error: "Errore interno del server", code: "DELETE_ERROR" });
     }
   }
 
@@ -474,33 +479,26 @@ export class BarController {
     try {
       const bars = await barRepository.getAllBars();
 
-      const enrichedBars = await Promise.all(
-        bars.map(async (bar) => {
-          const hasCoordinates =
-            bar.latitude !== null &&
-            bar.longitude !== null &&
-            Number.isFinite(Number(bar.latitude)) &&
-            Number.isFinite(Number(bar.longitude));
+      // Le coordinate vengono calcolate all'approvazione (o dal backfill all'avvio), mai a ogni richiesta
+      const pointsPerEuro = (await platformConfigRepository.get()).pointsPerEuro;
+      const enrichedBars = bars.map((bar) => {
+        const hasCoordinates =
+          bar.latitude !== null &&
+          bar.longitude !== null &&
+          Number.isFinite(Number(bar.latitude)) &&
+          Number.isFinite(Number(bar.longitude));
 
-          if (hasCoordinates) {
-            return {
-              ...bar,
-              latitude: Number(bar.latitude),
-              longitude: Number(bar.longitude),
-            };
-          }
-
-          const geocoded = await this.geocodeAddress(bar.address);
-          return {
-            ...bar,
-            latitude: geocoded?.latitude ?? null,
-            longitude: geocoded?.longitude ?? null,
-          };
-        })
-      );
+        return {
+          ...bar,
+          pointsPerEuro,
+          latitude: hasCoordinates ? Number(bar.latitude) : null,
+          longitude: hasCoordinates ? Number(bar.longitude) : null,
+        };
+      });
 
       return reply.status(200).send({ success: true, data: enrichedBars });
     } catch (error) {
+      console.error("❌ Errore recupero bar:", error);
       return reply.status(500).send({ success: false, error: "Errore nel recupero dei bar" });
     }
   }
