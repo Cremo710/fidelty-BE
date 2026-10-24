@@ -147,15 +147,11 @@ if (isMain) {
 
       const recipient = process.env.METRICS_EMAIL_RECIPIENT;
       if (recipient) {
-        // Invia via emailService usando sendWithDefaultSender non esposta — usiamo il metodo di verifica email come canale
         console.log(`📧 Invio metriche a ${recipient}...`);
-        await emailService.sendNewConsumptionRequestEmail({
+        await emailService.sendPlainTextEmail({
           recipientEmail: recipient,
-          barName: "Report Automatico",
-          requesterName: "Sistema",
-          amount: 0,
-          pointsPreview: 0,
-          requestId: "metrics-report",
+          subject: "Fidelty – Report metriche pilota",
+          text,
         }).catch(() => console.warn("⚠️ Invio metriche via email fallito"));
       }
 

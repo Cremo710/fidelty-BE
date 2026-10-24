@@ -1,6 +1,7 @@
 import { databaseService } from "./databaseService.js";
 import { emailService } from "./emailService.js";
 import { userRepository } from "../repositories/userRepository.js";
+import { pruneUnregisteredTokens, type ExpoPushTicket } from "../utils/expoPush.js";
 
 export type NotificationChannel = "expo-push" | "email" | "none";
 
@@ -86,7 +87,8 @@ class ConsumptionNotificationService {
         return { delivered: false, channel: "none" };
       }
 
-      const json = (await response.json()) as { data?: Array<{ status: string }> };
+      const json = (await response.json()) as { data?: ExpoPushTicket[] };
+      await pruneUnregisteredTokens(tokenResult.rows.map((row) => row.token), json.data ?? []);
       const allOk = json.data?.every((r) => r.status === "ok") ?? false;
 
       console.log(`🔔 Expo Push inviato a ${tokenResult.rows.length} device(s) per richiesta ${input.requestId}`);

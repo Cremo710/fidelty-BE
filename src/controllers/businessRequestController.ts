@@ -8,6 +8,10 @@ import { emailService } from "../services/emailService.js";
 import { getAuthService } from "../services/authService.js";
 import { issueEmailVerification } from "./authController.js";
 import { registerSchema } from "../validators/authValidator.js";
+import { z } from "zod";
+import { createOfferSchema } from "../validators/offerValidator.js";
+import { setOpeningHoursSchema } from "../validators/openingHoursValidator.js";
+import { isValidItalianVat } from "../utils/vat.js";
 
 interface GoogleGeocodeResponse {
   status: string;
@@ -113,8 +117,13 @@ export class BusinessRequestController {
       return null;
     }
 
-    if (!/^\d{11}$/.test(data.vatNumber.replace(/\s/g, ""))) {
+    const cleanVat = data.vatNumber.replace(/\s/g, "");
+    if (!/^\d{11}$/.test(cleanVat)) {
       await reply.status(400).send({ success: false, error: "Partita IVA non valida (deve contenere 11 cifre)" });
+      return null;
+    }
+    if (!isValidItalianVat(cleanVat)) {
+      await reply.status(400).send({ success: false, error: "Partita IVA non valida (cifra di controllo errata)" });
       return null;
     }
 
@@ -128,6 +137,14 @@ export class BusinessRequestController {
       return null;
     }
 
+    const urlFields: Array<[string, string]> = [["website", "Sito web"], ["instagram", "Instagram"], ["facebook", "Facebook"], ["tiktok", "TikTok"]];
+    for (const [field, label] of urlFields) {
+      if (data[field] && !/^https?:\/\/\S+$/i.test(data[field])) {
+        await reply.status(400).send({ success: false, error: `${label}: il link deve iniziare con http:// o https://` });
+        return null;
+      }
+    }
+
     let offers: unknown[] = [];
     if (data.offers) {
       try {
@@ -138,6 +155,13 @@ export class BusinessRequestController {
         await reply.status(400).send({ success: false, error: "Formato offerte non valido" });
         return null;
       }
+
+      const offersResult = z.array(createOfferSchema).max(50, "Troppe offerte").safeParse(offers);
+      if (!offersResult.success) {
+        await reply.status(400).send({ success: false, error: `Offerta non valida: ${offersResult.error.errors[0]?.message ?? "dati errati"}` });
+        return null;
+      }
+      offers = offersResult.data;
     }
 
     let openingHours: unknown[] = [];
@@ -150,6 +174,13 @@ export class BusinessRequestController {
         await reply.status(400).send({ success: false, error: "Formato orari non valido" });
         return null;
       }
+
+      const hoursResult = setOpeningHoursSchema.safeParse({ hours: openingHours });
+      if (!hoursResult.success) {
+        await reply.status(400).send({ success: false, error: `Orari non validi: ${hoursResult.error.errors[0]?.message ?? "dati errati"}` });
+        return null;
+      }
+      openingHours = hoursResult.data.hours;
     }
 
     const validateOptionalImage = (buffer: Buffer | null, mimeType: string | null, fieldLabel: string): string | null => {

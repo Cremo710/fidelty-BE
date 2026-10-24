@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const createOfferSchema = z.object({
+const baseOfferSchema = z.object({
   title: z
     .string()
     .min(2, "Titolo deve avere almeno 2 caratteri")
@@ -51,7 +51,17 @@ export const createOfferSchema = z.object({
     .default(0),
 });
 
-export const updateOfferSchema = createOfferSchema.partial();
+const validityRange = (data: { validFrom?: string | null; validUntil?: string | null }) =>
+  !data.validFrom || !data.validUntil || new Date(data.validUntil) > new Date(data.validFrom);
+
+const validityRangeError = {
+  message: "La data di fine deve essere successiva alla data di inizio",
+  path: ["validUntil"],
+};
+
+export const createOfferSchema = baseOfferSchema.refine(validityRange, validityRangeError);
+
+export const updateOfferSchema = baseOfferSchema.partial().refine(validityRange, validityRangeError);
 
 export type CreateOfferInput = z.infer<typeof createOfferSchema>;
 export type UpdateOfferInput = z.infer<typeof updateOfferSchema>;

@@ -55,6 +55,7 @@ export interface BarCompleteCreationData {
     validFrom?: string | null;
     validUntil?: string | null;
     isActive?: boolean;
+    requiredLoyaltyLevel?: number;
   }>;
   openingHours?: Array<{
     dayOfWeek: number;
@@ -202,7 +203,7 @@ export class BarRepository {
    */
   async findById(id: string): Promise<BarDTO | null> {
     try {
-      const query = "SELECT * FROM bars WHERE id = $1";
+      const query = "SELECT * FROM bars WHERE id = $1 AND deleted_at IS NULL";
       const result = await databaseService.getPool().query(query, [id]);
       return result.rows[0] || null;
     } catch (error) {
@@ -218,7 +219,7 @@ export class BarRepository {
    */
   async findByUserId(userId: string): Promise<BarDTO | null> {
     try {
-      const query = "SELECT * FROM bars WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1";
+      const query = "SELECT * FROM bars WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1";
       const result = await databaseService.getPool().query(query, [userId]);
       return result.rows[0] || null;
     } catch (error) {
@@ -229,7 +230,7 @@ export class BarRepository {
 
   async findAllByUserId(userId: string): Promise<BarDTO[]> {
     try {
-      const query = "SELECT * FROM bars WHERE user_id = $1 ORDER BY created_at DESC, id DESC";
+      const query = "SELECT * FROM bars WHERE user_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC, id DESC";
       const result = await databaseService.getPool().query(query, [userId]);
       return result.rows || [];
     } catch (error) {
@@ -243,7 +244,7 @@ export class BarRepository {
    */
   async findByPiva(piva: string): Promise<BarDTO | null> {
     try {
-      const query = "SELECT * FROM bars WHERE iva = $1 LIMIT 1";
+      const query = "SELECT * FROM bars WHERE iva = $1 AND deleted_at IS NULL LIMIT 1";
       const result = await databaseService.getPool().query(query, [piva]);
       return result.rows[0] || null;
     } catch (error) {
@@ -291,6 +292,7 @@ export class BarRepository {
           created_at,
           updated_at
         FROM bars
+        WHERE deleted_at IS NULL
         ORDER BY id ASC
       `;
       const result = await databaseService.getPool().query(query);
@@ -563,27 +565,27 @@ export class BarRepository {
         databaseService.getPool().query(
           `
             SELECT
-              COUNT(DISTINCT cr.requester_user_id) FILTER (WHERE cr.status = 'approved') AS customers_with_receipts,
-              COUNT(cr.id) FILTER (WHERE cr.status = 'approved') AS total_receipts,
-              COALESCE(SUM(cr.points_preview) FILTER (WHERE cr.status = 'approved'), 0) AS total_points_issued,
-              COALESCE(SUM(cr.amount) FILTER (WHERE cr.status = 'approved'), 0) AS total_approved_amount,
-              COALESCE(ROUND(AVG(cr.amount) FILTER (WHERE cr.status = 'approved'), 2), 0) AS average_ticket,
-              COALESCE(ROUND(AVG(cr.points_preview) FILTER (WHERE cr.status = 'approved'), 1), 0) AS average_points_per_request,
+              COUNT(DISTINCT cr.requester_user_id) FILTER (WHERE cr.status IN ('approved', 'credited')) AS customers_with_receipts,
+              COUNT(cr.id) FILTER (WHERE cr.status IN ('approved', 'credited')) AS total_receipts,
+              COALESCE(SUM(cr.points_preview) FILTER (WHERE cr.status IN ('approved', 'credited')), 0) AS total_points_issued,
+              COALESCE(SUM(cr.amount) FILTER (WHERE cr.status IN ('approved', 'credited')), 0) AS total_approved_amount,
+              COALESCE(ROUND(AVG(cr.amount) FILTER (WHERE cr.status IN ('approved', 'credited')), 2), 0) AS average_ticket,
+              COALESCE(ROUND(AVG(cr.points_preview) FILTER (WHERE cr.status IN ('approved', 'credited')), 1), 0) AS average_points_per_request,
               COUNT(cr.id) FILTER (WHERE cr.status = 'pending') AS pending_requests,
               COUNT(cr.id) FILTER (WHERE cr.status = 'rejected') AS rejected_requests,
               COALESCE(
                 ROUND(
                   (
-                    COUNT(cr.id) FILTER (WHERE cr.status = 'approved')::numeric * 100
-                  ) / NULLIF(COUNT(cr.id) FILTER (WHERE cr.status IN ('approved', 'rejected')), 0),
+                    COUNT(cr.id) FILTER (WHERE cr.status IN ('approved', 'credited'))::numeric * 100
+                  ) / NULLIF(COUNT(cr.id) FILTER (WHERE cr.status IN ('approved', 'credited', 'rejected')), 0),
                   1
                 ),
                 0
               ) AS approval_rate,
               COALESCE(
                 ROUND(
-                  COUNT(cr.id) FILTER (WHERE cr.status = 'approved')::numeric
-                    / NULLIF(COUNT(DISTINCT cr.requester_user_id) FILTER (WHERE cr.status = 'approved'), 0),
+                  COUNT(cr.id) FILTER (WHERE cr.status IN ('approved', 'credited'))::numeric
+                    / NULLIF(COUNT(DISTINCT cr.requester_user_id) FILTER (WHERE cr.status IN ('approved', 'credited')), 0),
                   1
                 ),
                 0
@@ -650,28 +652,23 @@ export class BarRepository {
   }
 
   /**
-   * Elimina un bar
-   * @param id - ID del bar da eliminare
-   * @returns true se l'eliminazione è stata effettuata
+   * Disattiva un bar (soft delete): le tessere e i punti dei clienti restano.
+   * La P.IVA resta occupata: un bar disattivato può essere riattivato solo da un admin
+   * (impostando deleted_at = NULL).
+   * @param id - ID del bar da disattivare
+   * @returns true se il bar è stato disattivato
    */
   async deleteBar(id: string): Promise<boolean> {
-    const client = await databaseService.getPool().connect();
-
     try {
-      await client.query("BEGIN");
-
-      const query = "DELETE FROM bars WHERE id = $1 RETURNING id";
-      const result = await client.query(query, [id]);
-
-      await client.query("COMMIT");
-      console.log(`✅ Bar eliminato con ID: ${id}`);
+      const result = await databaseService.getPool().query(
+        "UPDATE bars SET deleted_at = NOW(), updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL RETURNING id",
+        [id],
+      );
+      console.log(`✅ Bar disattivato con ID: ${id}`);
       return result.rows.length > 0;
     } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("❌ Errore durante l'eliminazione del bar:", error);
+      console.error("❌ Errore durante la disattivazione del bar:", error);
       throw error;
-    } finally {
-      client.release();
     }
   }
 
@@ -739,9 +736,9 @@ export class BarRepository {
         await client.query(
           `INSERT INTO offers (
              id, bar_id, title, description, conditions,
-             points_required, icon, valid_from, valid_until, is_active, updated_at
+             points_required, icon, valid_from, valid_until, is_active, required_loyalty_level, updated_at
            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)`,
           [
             offerId,
             barId,
@@ -753,6 +750,7 @@ export class BarRepository {
             offer.validFrom ?? null,
             offer.validUntil ?? null,
             offer.isActive ?? true,
+            offer.requiredLoyaltyLevel ?? 0,
           ]
         );
       }

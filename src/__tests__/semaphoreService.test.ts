@@ -49,7 +49,6 @@ interface PlatformCfg {
   youngAccountMinRequests: number;
   youngAccountMaxAmount: number;
   rateLimitPerUserPerBarPerDay: number;
-  ocrEnabled?: boolean;
   mockLocationReject?: boolean;
 }
 
@@ -132,10 +131,6 @@ function evaluateSignals(
     if (opts.ocrReceiptDate !== today) {
       signals.push({ code: "DATE_MISMATCH", severity: "review", reason: "Date mismatch" });
     }
-  }
-
-  if ((platform.ocrEnabled ?? false) && opts.hasOcrSession === false) {
-    signals.push({ code: "MANUAL_ENTRY", severity: "review", reason: "Manual entry" });
   }
 
   if (opts.hasOcrSession === true && opts.ocrFieldsFound) {
@@ -423,34 +418,6 @@ describe("Semaphore signal evaluation", () => {
     expect(signals.some((s) => s.code === "DATE_MISMATCH")).toBe(false);
   });
 
-  // ── MANUAL_ENTRY (review, solo se ocrEnabled) ────────────────────────────────
-
-  it("signals MANUAL_ENTRY (review) when ocrEnabled=true and hasOcrSession=false", () => {
-    const { signals } = evaluateSignals(10, defaultBarConfig,
-      { ...defaultPlatform, ocrEnabled: true },
-      { hasOcrSession: false },
-    );
-    const s = signals.find((x) => x.code === "MANUAL_ENTRY");
-    expect(s).toBeDefined();
-    expect(s?.severity).toBe("review");
-  });
-
-  it("does NOT signal MANUAL_ENTRY when ocrEnabled=false (comportamento invariato)", () => {
-    const { signals } = evaluateSignals(10, defaultBarConfig,
-      { ...defaultPlatform, ocrEnabled: false },
-      { hasOcrSession: false },
-    );
-    expect(signals.some((s) => s.code === "MANUAL_ENTRY")).toBe(false);
-  });
-
-  it("does NOT signal MANUAL_ENTRY when hasOcrSession=true", () => {
-    const { signals } = evaluateSignals(10, defaultBarConfig,
-      { ...defaultPlatform, ocrEnabled: true },
-      { hasOcrSession: true, ocrFieldsFound: { amount: true, vatNumber: true } },
-    );
-    expect(signals.some((s) => s.code === "MANUAL_ENTRY")).toBe(false);
-  });
-
   // ── OCR_LOW_CONFIDENCE (review) ──────────────────────────────────────────────
 
   it("signals OCR_LOW_CONFIDENCE when OCR failed to read amount", () => {
@@ -481,7 +448,7 @@ describe("Semaphore signal evaluation", () => {
 
   it("§6.3: OCR completo e coerente → green, status=credited, punti pieni", () => {
     const { signals } = evaluateSignals(12.50, defaultBarConfig,
-      { ...defaultPlatform, ocrEnabled: true },
+      defaultPlatform,
       {
         hasOcrSession: true,
         ocrFieldsFound: { amount: true, vatNumber: true },
@@ -493,9 +460,9 @@ describe("Semaphore signal evaluation", () => {
     expect(aggregateStatus(signals)).toBe("green");
   });
 
-  it("§6.3: OCR fallito totalmente → giallo con MANUAL_ENTRY + OCR_LOW_CONFIDENCE", () => {
+  it("§6.3: OCR fallito totalmente → giallo con OCR_LOW_CONFIDENCE", () => {
     const { signals } = evaluateSignals(12.50, defaultBarConfig,
-      { ...defaultPlatform, ocrEnabled: true },
+      defaultPlatform,
       {
         hasOcrSession: true,
         ocrFieldsFound: { amount: false, vatNumber: false },
@@ -516,48 +483,5 @@ describe("Semaphore signal evaluation", () => {
     });
     expect(signals.some((s) => s.code === "ANOMALY")).toBe(false);
     expect(aggregateStatus(signals)).toBe("green");
-  });
-});
-
-// ─── Consumption detail tolerance validation (±20%) ──────────────────────────
-
-function evaluateDetailTolerance(
-  declaredAmount: number,
-  itemsTotal: number,
-  tolerancePct = 20,
-): { status: "verified" | "low_quality"; bonusAwarded: boolean } {
-  const min = declaredAmount * (1 - tolerancePct / 100);
-  const max = declaredAmount * (1 + tolerancePct / 100);
-  const withinTolerance = itemsTotal >= min && itemsTotal <= max;
-  return {
-    status: withinTolerance ? "verified" : "low_quality",
-    bonusAwarded: withinTolerance,
-  };
-}
-
-describe("Consumption detail tolerance (±20%)", () => {
-  it("verifies detail when items total is exactly declared amount", () => {
-    expect(evaluateDetailTolerance(20, 20)).toMatchObject({ status: "verified", bonusAwarded: true });
-  });
-
-  it("verifies detail when items total is exactly at lower bound (−20%)", () => {
-    expect(evaluateDetailTolerance(20, 16)).toMatchObject({ status: "verified", bonusAwarded: true });
-  });
-
-  it("verifies detail when items total is exactly at upper bound (+20%)", () => {
-    expect(evaluateDetailTolerance(20, 24)).toMatchObject({ status: "verified", bonusAwarded: true });
-  });
-
-  it("marks low_quality when items total is just below lower bound", () => {
-    expect(evaluateDetailTolerance(20, 15.99)).toMatchObject({ status: "low_quality", bonusAwarded: false });
-  });
-
-  it("marks low_quality when items total is just above upper bound", () => {
-    expect(evaluateDetailTolerance(20, 24.01)).toMatchObject({ status: "low_quality", bonusAwarded: false });
-  });
-
-  it("verifies detail within tolerance with real-world values", () => {
-    // declared 18.50 €, items total 17 € — within ±20% (min 14.80, max 22.20)
-    expect(evaluateDetailTolerance(18.5, 17)).toMatchObject({ status: "verified", bonusAwarded: true });
   });
 });

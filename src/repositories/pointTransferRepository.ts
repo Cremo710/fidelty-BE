@@ -87,15 +87,15 @@ export class PointTransferRepository {
     }));
   }
 
-  async getDailySentPoints(senderUserId: string): Promise<number> {
-    const result = await databaseService.getPool().query(
+  async getDailySentPoints(senderUserId: string, db: Queryable = databaseService.getPool()): Promise<number> {
+    const result = await db.query(
       `
         SELECT COALESCE(SUM(points_amount), 0)::int AS total
         FROM point_transfers
         WHERE sender_user_id = $1
           AND status = 'completed'
-          AND created_at >= CURRENT_DATE
-          AND created_at < CURRENT_DATE + INTERVAL '1 day'
+          AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'
+          AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'
       `,
       [senderUserId],
     );
@@ -103,8 +103,8 @@ export class PointTransferRepository {
     return Number(result.rows[0]?.total) || 0;
   }
 
-  async findByIdempotencyKey(senderUserId: string, idempotencyKey: string): Promise<any | null> {
-    const result = await databaseService.getPool().query(
+  async findByIdempotencyKey(senderUserId: string, idempotencyKey: string, db: Queryable = databaseService.getPool()): Promise<any | null> {
+    const result = await db.query(
       `
         SELECT *
         FROM point_transfers

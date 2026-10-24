@@ -16,6 +16,7 @@ export interface SignalFlag {
     | "DUPLICATE_IMAGE"    // Fase 2 — rosso
     | "MOCK_LOCATION"      // Fase 2 — rosso
     | "DATE_MISMATCH"      // Fase 2 — giallo
+    | "AMOUNT_CORRECTED"   // importo corretto dal barista in approvazione
     | "OCR_LOW_CONFIDENCE";// Fase 2 — giallo
   reason: string;
   /** reject = rosso (rifiuto automatico); review = giallo (coda barista) */
@@ -35,6 +36,7 @@ export interface SemaphoreInput {
   receiptCodeBlock1: string | null;
   receiptCodeBlock2: string | null;
   barConfig: BarConfigDTO;
+  client?: import("pg").PoolClient;
   // Fase 2 — nuovi campi opzionali (default sicuro se assenti)
   barPiva?: string | null;          // P.IVA del bar: per PIVA_MISMATCH
   ocrVatNumber?: string | null;     // P.IVA letta dall'OCR
@@ -52,7 +54,8 @@ export class SemaphoreService {
    */
   async evaluate(input: SemaphoreInput): Promise<SemaphoreEvaluation> {
     const { userId, barId, amount, receiptCodeBlock1, receiptCodeBlock2, barConfig } = input;
-    const pool = databaseService.getPool();
+    // Se il chiamante passa un client, le letture avvengono nella sua transazione (dopo il lock utente/bar)
+    const pool = (input.client ?? databaseService.getPool()) as import("pg").Pool;
     const signals: SignalFlag[] = [];
 
     // ── Platform config (cached) ──────────────────────────────────────────────
@@ -65,8 +68,8 @@ export class SemaphoreService {
        WHERE requester_user_id = $1
          AND bar_id = $2
          AND status != 'rejected'
-         AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome')
-         AND created_at  < date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day'`,
+         AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'
+         AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'`,
       [userId, barId],
     );
     const todayCount = Number(rateLimitResult.rows[0]?.cnt ?? 0);
@@ -85,8 +88,8 @@ export class SemaphoreService {
          FROM consumption_requests
          WHERE requester_user_id = $1
            AND status IN ('approved', 'credited')
-           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome')
-           AND created_at  < date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day'`,
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'
+           AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'`,
         [userId],
       ),
       pool.query<{ total: string }>(
@@ -94,8 +97,8 @@ export class SemaphoreService {
          FROM consumption_requests
          WHERE bar_id = $1
            AND status IN ('approved', 'credited')
-           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome')
-           AND created_at  < date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day'`,
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'
+           AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'`,
         [barId],
       ),
     ]);

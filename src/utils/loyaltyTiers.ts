@@ -10,8 +10,8 @@ export const MAX_TIER_INDEX = LOYALTY_TIERS.length - 1;
 
 /**
  * Restituisce l'indice del tier più alto la cui minPoints è <= points.
- * Usa i punti TOTALI della carta (totalPoints), non quelli disponibili,
- * perché il livello è un traguardo storico.
+ * Usa i punti guadagnati in totale (lifetime_points), non il saldo,
+ * perché il livello è un traguardo storico che non scende con riscatti e trasferimenti.
  */
 export function getTierIndexFromPoints(points: number): number {
   let index = 0;
@@ -19,4 +19,19 @@ export function getTierIndexFromPoints(points: number): number {
     if (points >= LOYALTY_TIERS[i].minPoints) index = i;
   }
   return index;
+}
+
+/** Livello attuale, prossimo livello e punti mancanti, calcolati sui punti guadagnati in totale. */
+export function getTierProgress(lifetimePoints: number) {
+  const levelIndex = getTierIndexFromPoints(lifetimePoints);
+  const next = levelIndex < MAX_TIER_INDEX ? LOYALTY_TIERS[levelIndex + 1] : null;
+  return {
+    level: levelIndex,
+    levelId: LOYALTY_TIERS[levelIndex].id,
+    currentMinPoints: LOYALTY_TIERS[levelIndex].minPoints,
+    nextLevel: next ? levelIndex + 1 : null,
+    nextLevelId: next ? next.id : null,
+    nextMinPoints: next ? next.minPoints : null,
+    pointsToNextLevel: next ? Math.max(next.minPoints - lifetimePoints, 0) : 0,
+  };
 }

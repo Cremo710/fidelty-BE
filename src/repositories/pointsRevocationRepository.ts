@@ -31,8 +31,9 @@ export class PointsRevocationRepository {
       // Deduct points from loyalty card (floor at 0)
       await client.query(
         `UPDATE loyalty_cards
-         SET points     = GREATEST(points - $1, 0),
-             updated_at = CURRENT_TIMESTAMP
+         SET points          = GREATEST(points - $1, 0),
+             lifetime_points = GREATEST(lifetime_points - $1, 0),
+             updated_at      = CURRENT_TIMESTAMP
          WHERE user_id = $2 AND bar_id = $3`,
         [input.pointsAmount, input.userId, input.barId],
       );

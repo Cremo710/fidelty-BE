@@ -2,6 +2,9 @@ import { ulid } from "ulid";
 import { databaseService } from "../services/databaseService.js";
 import { loyaltyCardRepository } from "./loyaltyCardRepository.js";
 import type { SignalFlag } from "../services/semaphoreService.js";
+import { platformConfigRepository } from "./platformConfigRepository.js";
+
+const MAX_CORRECTED_AMOUNT_RATIO = 2;
 
 export interface ConsumptionRequestDTO {
   id: string;
@@ -124,14 +127,16 @@ export class ConsumptionRequestRepository {
 
   /**
    * Marks a previously-credited request as yellow (retroactive duplicate flag).
-   * Feature-flagged behind FEATURE_RETROACTIVE_DUPLICATES env var.
+   * Feature-flagged behind FEATURE_RETROACTIVE_DUPLICATES env var (lasciare disattivato).
+   * I punti già accreditati vengono sottratti nella stessa transazione: se il barista
+   * approva poi la richiesta, l'approvazione li riaccredita una sola volta.
    */
   async markAsRetroactivelyFlagged(
     client: import("pg").PoolClient,
     requestId: string,
     duplicateSignal: SignalFlag,
   ): Promise<void> {
-    await client.query(
+    const updated = await client.query<{ requester_user_id: string; bar_id: string; points_preview: number }>(
       `UPDATE consumption_requests
        SET status               = 'pending',
            semaphore_status     = 'yellow',
@@ -139,8 +144,21 @@ export class ConsumptionRequestRepository {
            signal_flags         = signal_flags || $2::jsonb,
            approved_at          = NULL,
            updated_at           = CURRENT_TIMESTAMP
-       WHERE id = $1 AND status = 'credited'`,
+       WHERE id = $1 AND status = 'credited'
+       RETURNING requester_user_id, bar_id, points_preview`,
       [requestId, JSON.stringify([duplicateSignal])],
+    );
+
+    const row = updated.rows[0];
+    if (!row) return;
+
+    await client.query(
+      `UPDATE loyalty_cards
+       SET points          = GREATEST(points - $3, 0),
+           lifetime_points = GREATEST(lifetime_points - $3, 0),
+           updated_at      = CURRENT_TIMESTAMP
+       WHERE user_id = $1 AND bar_id = $2`,
+      [row.requester_user_id, row.bar_id, Number(row.points_preview) || 0],
     );
   }
 
@@ -223,11 +241,25 @@ export class ConsumptionRequestRepository {
         throw new Error("CONSUMPTION_REQUEST_ALREADY_PROCESSED");
       }
 
-      // If barista corrected the amount, recalculate points (100 pts per €)
+      const platformConfig = await platformConfigRepository.get();
+
+      // Importo corretto dal barista: al massimo il doppio dell'importo originale
+      const originalAmount = Number(existing.amount);
       const finalAmount = (input.correctedAmount != null && input.correctedAmount > 0)
         ? input.correctedAmount
-        : Number(existing.amount);
-      const pointsEarned = Math.round(finalAmount * 100);
+        : originalAmount;
+      if (finalAmount > originalAmount * MAX_CORRECTED_AMOUNT_RATIO) {
+        throw new Error("CORRECTED_AMOUNT_TOO_HIGH");
+      }
+      const pointsEarned = Math.round(finalAmount * platformConfig.pointsPerEuro);
+      const amountCorrected = Math.abs(finalAmount - originalAmount) > 0.004;
+      const correctionFlag: SignalFlag[] = amountCorrected
+        ? [{
+            code: "AMOUNT_CORRECTED",
+            severity: "review",
+            reason: `Importo corretto dal barista da ${originalAmount.toFixed(2)} € a ${finalAmount.toFixed(2)} €.`,
+          }]
+        : [];
 
       await loyaltyCardRepository.upsertCardInTransaction(
         client,
@@ -243,6 +275,7 @@ export class ConsumptionRequestRepository {
             status = 'approved',
             amount = $3,
             points_preview = $4,
+            signal_flags = signal_flags || $5::jsonb,
             approved_at = CURRENT_TIMESTAMP,
             rejected_at = NULL,
             processed_by_user_id = $2,
@@ -251,7 +284,7 @@ export class ConsumptionRequestRepository {
           WHERE id = $1
           RETURNING *
         `,
-        [input.requestId, input.processedByUserId, finalAmount.toFixed(2), pointsEarned],
+        [input.requestId, input.processedByUserId, finalAmount.toFixed(2), pointsEarned, JSON.stringify(correctionFlag)],
       );
 
       await client.query("COMMIT");

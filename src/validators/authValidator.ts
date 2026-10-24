@@ -9,12 +9,13 @@ export const registerSchema = z.object({
     .trim(),
   email: z
     .string()
-    .email("Email non valida")
+    .trim()
     .toLowerCase()
-    .trim(),
+    .email("Email non valida"),
   password: z
     .string()
     .min(8, "Password deve avere almeno 8 caratteri")
+    .max(128, "Password non può superare 128 caratteri")
     .regex(/[A-Z]/, "Password deve contenere almeno una maiuscola")
     .regex(/[0-9]/, "Password deve contenere almeno un numero")
     .regex(/[a-z]/, "Password deve contenere almeno una minuscola"),
@@ -24,9 +25,9 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
   email: z
     .string()
-    .email("Email non valida")
+    .trim()
     .toLowerCase()
-    .trim(),
+    .email("Email non valida"),
   password: z
     .string()
     .min(1, "Password è obbligatoria"),
@@ -42,21 +43,21 @@ export const refreshSchema = z.object({
 export const emailRequestSchema = z.object({
   email: z
     .string()
-    .email("Email non valida")
+    .trim()
     .toLowerCase()
-    .trim(),
+    .email("Email non valida"),
 });
 
 export const verifyEmailSchema = z.object({
   email: z
     .string()
-    .email("Email non valida")
+    .trim()
     .toLowerCase()
-    .trim(),
+    .email("Email non valida"),
   token: z
     .string()
-    .regex(/^\d{6}$/, "Il codice di verifica deve contenere 6 cifre")
-    .trim(),
+    .trim()
+    .regex(/^\d{6}$/, "Il codice di verifica deve contenere 6 cifre"),
 });
 
 export const resetPasswordConfirmSchema = z.object({
@@ -67,6 +68,7 @@ export const resetPasswordConfirmSchema = z.object({
   password: z
     .string()
     .min(8, "Password deve avere almeno 8 caratteri")
+    .max(128, "Password non può superare 128 caratteri")
     .regex(/[A-Z]/, "Password deve contenere almeno una maiuscola")
     .regex(/[0-9]/, "Password deve contenere almeno un numero")
     .regex(/[a-z]/, "Password deve contenere almeno una minuscola"),

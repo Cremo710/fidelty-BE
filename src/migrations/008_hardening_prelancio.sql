@@ -1,9 +1,14 @@
 -- Migration 008 — Hardening pre-lancio
 -- Contiene: device_push_tokens, receipt_events, correzione default bar_config,
 --           aggiornamento rate limit e nuove chiavi platform_config.
--- Idempotente: IF NOT EXISTS, ON CONFLICT DO NOTHING per INSERT seed.
+-- Idempotente. Gli UPDATE sui dati esistenti (sezioni 3 e 4) vengono saltati se la
+-- migration è già stata applicata (device_push_tokens esiste già), così una
+-- riesecuzione non sovrascrive le impostazioni dei titolari.
 
 BEGIN;
+
+CREATE TEMP TABLE _m008_state ON COMMIT DROP AS
+  SELECT (to_regclass('public.device_push_tokens') IS NOT NULL) AS already_applied;
 
 -- ─── 1. device_push_tokens ─────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS device_push_tokens (
@@ -54,12 +59,14 @@ UPDATE bar_config SET
   cap_amount            = LEAST(cap_amount, 30.00),
   anomaly_enabled       = TRUE,
   young_account_enabled = TRUE,
-  updated_at            = CURRENT_TIMESTAMP;
+  updated_at            = CURRENT_TIMESTAMP
+WHERE NOT (SELECT already_applied FROM _m008_state);
 
 -- ─── 4. Aggiorna rate limit (005 usa ON CONFLICT DO NOTHING, serve UPDATE) ──
 UPDATE platform_config
   SET value = '4'::jsonb, updated_at = CURRENT_TIMESTAMP
-  WHERE key = 'rate_limit_per_user_per_bar_per_day';
+  WHERE key = 'rate_limit_per_user_per_bar_per_day'
+    AND NOT (SELECT already_applied FROM _m008_state);
 
 -- ─── 5. Nuove chiavi platform_config ───────────────────────────────────────
 INSERT INTO platform_config (key, value) VALUES

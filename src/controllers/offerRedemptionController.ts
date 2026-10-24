@@ -9,7 +9,7 @@ import {
 import { databaseService } from "../services/databaseService.js";
 import { offerRedemptionTokenService } from "../services/offerRedemptionTokenService.js";
 import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
-import { getTierIndexFromPoints } from "../utils/loyaltyTiers.js";
+import { getTierIndexFromPoints, getTierProgress } from "../utils/loyaltyTiers.js";
 
 const QR_TTL_MS = 10 * 60 * 1000;
 
@@ -71,6 +71,8 @@ export class OfferRedemptionController {
         success: true,
         data: {
           totalPoints: pointsSnapshot?.totalPoints || 0,
+          lifetimePoints: pointsSnapshot?.lifetimePoints || 0,
+          loyalty: getTierProgress(pointsSnapshot?.lifetimePoints || 0),
           frozenPoints: pointsSnapshot?.frozenPoints || 0,
           availablePoints: pointsSnapshot?.availablePoints || 0,
           hasLoyaltyCard: Boolean(pointsSnapshot),
@@ -117,12 +119,16 @@ export class OfferRedemptionController {
         return reply.status(409).send({ success: false, error: "Offerta scaduta", code: "OFFER_EXPIRED" });
       }
 
-      const existingRedemption = await offerRedemptionRepository.findActiveByUserBarOffer(
-        client,
-        userId,
-        offer.bar_id,
-        offerId,
-      );
+      const existingRedemption = await (async () => {
+        // Lock per utente/bar: richieste simultanee non possono congelare più punti di quelli disponibili
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`redemption:${userId}:${offer.bar_id}`]);
+        return offerRedemptionRepository.findActiveByUserBarOffer(
+          client,
+          userId,
+          offer.bar_id,
+          offerId,
+        );
+      })();
 
       if (existingRedemption) {
         await client.query("COMMIT");
@@ -157,7 +163,7 @@ export class OfferRedemptionController {
 
       const requiredLevel = offer.required_loyalty_level ?? 0;
       if (requiredLevel > 0) {
-        const userLevel = getTierIndexFromPoints(pointsSnapshot.totalPoints);
+        const userLevel = getTierIndexFromPoints(pointsSnapshot.lifetimePoints);
         if (userLevel < requiredLevel) {
           await client.query("ROLLBACK");
           return reply.status(409).send({

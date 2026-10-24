@@ -346,9 +346,15 @@ class FriendsController {
         return reply.status(403).send({ success: false, error: "Scambio punti disponibile solo tra amici", code: "FRIENDSHIP_REQUIRED" });
       }
 
+      const sender = await userRepository.findById(userId);
+      await client.query("BEGIN");
+      // Lock per mittente: serializza trasferimenti concorrenti prima di controllare idempotenza e limite giornaliero
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`transfer:${userId}`]);
+
       if (idempotencyKey) {
-        const existingTransfer = await pointTransferRepository.findByIdempotencyKey(userId, idempotencyKey);
+        const existingTransfer = await pointTransferRepository.findByIdempotencyKey(userId, idempotencyKey, client);
         if (existingTransfer) {
+          await client.query("ROLLBACK");
           return reply.status(200).send({
             success: true,
             data: {
@@ -360,8 +366,9 @@ class FriendsController {
         }
       }
 
-      const dailyTransferredPoints = await pointTransferRepository.getDailySentPoints(userId);
+      const dailyTransferredPoints = await pointTransferRepository.getDailySentPoints(userId, client);
       if (dailyTransferredPoints + (pointsAmount || 0) > DAILY_POINTS_TRANSFER_LIMIT) {
+        await client.query("ROLLBACK");
         return reply.status(409).send({
           success: false,
           error: "Hai raggiunto il limite giornaliero per lo scambio punti",
@@ -373,8 +380,6 @@ class FriendsController {
         });
       }
 
-      const sender = await userRepository.findById(userId);
-      await client.query("BEGIN");
       const { senderCard, recipientCard } = await pointTransferRepository.lockTransferCards(client, userId, target.id, barId);
       if (!senderCard || !recipientCard) {
         await client.query("ROLLBACK");

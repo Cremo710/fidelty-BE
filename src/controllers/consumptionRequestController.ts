@@ -16,6 +16,7 @@ import { deleteCloudinaryImageByUrl, getSignedCloudinaryUrl, uploadOptimizedImag
 const RECEIPT_IMAGE_RETENTION_DAYS = Number(process.env.RECEIPT_IMAGE_RETENTION_DAYS || 90);
 
 const QR_PREFIX = "FIDELTY_BAR:";
+const MANUAL_CREDIT_MAX_AMOUNT = 100; // € per singolo accredito manuale del barista
 
 const RECEIPT_CODE_RE = /^[0-9A-Za-z]{4}-[0-9A-Za-z]{4}$/;
 
@@ -165,11 +166,11 @@ export class ConsumptionRequestController {
         },
       ];
 
-      if (request.status === "approved" && request.approved_at) {
+      if ((request.status === "approved" || request.status === "credited") && (request.approved_at || request.created_at)) {
         items.push({
           id: `${request.id}-approved`,
           type: "points_earned",
-          createdAt: request.approved_at,
+          createdAt: request.approved_at || request.created_at,
           amount: Number.parseFloat(request.amount),
           pointsPreview: request.points_preview,
           bar,
@@ -646,9 +647,15 @@ export class ConsumptionRequestController {
         return reply.status(400).send({ success: false, error: "Non puoi inviare una richiesta al tuo stesso bar", code: "SELF_REQUEST_NOT_ALLOWED" });
       }
 
-      // ── Semaphore evaluation (also checks rate limit) ────────────────────────
+      // ── Transazione con lock per utente/bar: valutazione e inserimento sono atomici ──
+      const client = await databaseService.getPool().connect();
+      let clientReleased = false;
+      const releaseClient = () => { if (!clientReleased) { clientReleased = true; client.release(); } };
       let evaluation: Awaited<ReturnType<typeof semaphoreService.evaluate>>;
       try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption:${userId}:${bar.id}`]);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption-bar:${bar.id}`]);
         evaluation = await semaphoreService.evaluate({
           userId,
           barId: bar.id,
@@ -656,6 +663,7 @@ export class ConsumptionRequestController {
           receiptCodeBlock1,
           receiptCodeBlock2,
           barConfig: barCfg,
+          client,
           // Fase 2 — nuovi campi
           barPiva: bar.iva ?? null,
           ocrVatNumber: ocrSession ? (ocrSession as any).vat_number ?? null : undefined,
@@ -676,6 +684,8 @@ export class ConsumptionRequestController {
             : null,
         });
       } catch (semErr: any) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        releaseClient();
         if (semErr?.code === "RATE_LIMIT_EXCEEDED") {
           return reply.status(429).send({ success: false, error: semErr.message, code: "RATE_LIMIT_EXCEEDED" });
         }
@@ -690,15 +700,12 @@ export class ConsumptionRequestController {
         : null;
       const pointsPreview = Math.round(amount * platformConfig.pointsPerEuro);
 
-      const requester = await userRepository.findById(userId);
-
-      // ── Persist request (+ optional auto-credit) in a transaction ─────────────
-      const client = await databaseService.getPool().connect();
+      // ── Persist request (+ optional auto-credit) nella stessa transazione ─────
       let created: ConsumptionRequestDTO;
+      let requester: Awaited<ReturnType<typeof userRepository.findById>>;
       try {
-        await client.query("BEGIN");
-
-        const insertResult = await databaseService.getPool().query(
+        requester = await userRepository.findById(userId);
+        const insertResult = await client.query(
           `INSERT INTO consumption_requests (
               id, requester_user_id, bar_id, amount, points_preview, status,
               qr_code_value, requester_name_snapshot, requester_email_snapshot,
@@ -752,7 +759,7 @@ export class ConsumptionRequestController {
         }
         throw txErr;
       } finally {
-        client.release();
+        releaseClient();
       }
 
       // ── Marca sessione OCR come consumata ────────────────────────────────────
@@ -944,6 +951,10 @@ export class ConsumptionRequestController {
         return reply.status(404).send({ success: false, error: "Richiesta non trovata", code: errorMessage });
       }
 
+      if (errorMessage === "CORRECTED_AMOUNT_TOO_HIGH") {
+        return reply.status(400).send({ success: false, error: "L'importo corretto non può superare il doppio dell'importo originale", code: errorMessage });
+      }
+
       if (errorMessage === "CONSUMPTION_REQUEST_ALREADY_PROCESSED") {
         return reply.status(409).send({ success: false, error: "Richiesta già elaborata", code: errorMessage });
       }
@@ -983,8 +994,24 @@ export class ConsumptionRequestController {
       if (!targetUser) {
         return reply.status(404).send({ success: false, error: "Utente non trovato", code: "USER_NOT_FOUND" });
       }
+      if (targetUser.id === bar.user_id) {
+        return reply.status(400).send({ success: false, error: "Non puoi accreditare punti al titolare del bar", code: "SELF_CREDIT_NOT_ALLOWED" });
+      }
 
-      const platformConfig = await platformConfigRepository.get();
+      const [platformConfig, barCfgManual] = await Promise.all([
+        platformConfigRepository.get(),
+        barConfigRepository.getByBarId(bar.id),
+      ]);
+      const maxSingleAmount = barCfgManual.capEnabled
+        ? Math.min(barCfgManual.capAmount, MANUAL_CREDIT_MAX_AMOUNT)
+        : MANUAL_CREDIT_MAX_AMOUNT;
+      if (amount > maxSingleAmount) {
+        return reply.status(400).send({
+          success: false,
+          error: `Importo massimo per un singolo accredito manuale: ${maxSingleAmount.toFixed(2)} €`,
+          code: "MANUAL_CREDIT_AMOUNT_TOO_HIGH",
+        });
+      }
       const pointsPreview = Math.round(amount * platformConfig.pointsPerEuro);
       const signalReason = note ? `Credito manuale del barista: ${note}` : "Credito manuale del barista";
 
@@ -992,6 +1019,31 @@ export class ConsumptionRequestController {
       let created: ConsumptionRequestDTO;
       try {
         await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption:${targetUser.id}:${bar.id}`]);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption-bar:${bar.id}`]);
+
+        const dayFilter = `status IN ('approved', 'credited')
+           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'
+           AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'`;
+        const [userDaily, barDaily] = await Promise.all([
+          client.query<{ total: string }>(
+            `SELECT COALESCE(SUM(points_preview), 0) AS total FROM consumption_requests WHERE requester_user_id = $1 AND ${dayFilter}`,
+            [targetUser.id],
+          ),
+          client.query<{ total: string }>(
+            `SELECT COALESCE(SUM(points_preview), 0) AS total FROM consumption_requests WHERE bar_id = $1 AND ${dayFilter}`,
+            [bar.id],
+          ),
+        ]);
+        if (Number(userDaily.rows[0]?.total ?? 0) + pointsPreview > platformConfig.maxPointsPerUserPerDay
+          || Number(barDaily.rows[0]?.total ?? 0) + pointsPreview > platformConfig.maxPointsPerBarPerDay) {
+          await client.query("ROLLBACK");
+          return reply.status(429).send({
+            success: false,
+            error: "Tetto giornaliero di punti raggiunto",
+            code: "DAILY_POINTS_CAP_REACHED",
+          });
+        }
 
         const insertResult = await client.query(
           `INSERT INTO consumption_requests (

@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { databaseService } from "../services/databaseService.js";
-import { LOYALTY_TIERS, getTierIndexFromPoints } from "../utils/loyaltyTiers.js";
+import { LOYALTY_TIERS, getTierIndexFromPoints, getTierProgress } from "../utils/loyaltyTiers.js";
 
 class LoyaltyCardController {
   async listMine(request: FastifyRequest, reply: FastifyReply) {
@@ -33,10 +33,13 @@ class LoyaltyCardController {
           description: card.description,
           points: card.availablePoints,
           totalPoints: card.totalPoints,
+          lifetimePoints: card.lifetimePoints,
+          loyalty: getTierProgress(card.lifetimePoints),
+          barDeleted: card.barDeleted,
           frozenPoints: card.frozenPoints,
           availablePoints: card.availablePoints,
           receiptsCount: card.receiptsCount,
-          status: LOYALTY_TIERS[getTierIndexFromPoints(card.totalPoints)].id,
+          status: LOYALTY_TIERS[getTierIndexFromPoints(card.lifetimePoints)].id,
           lastReceiptAt: card.lastReceiptAt,
         })),
       });

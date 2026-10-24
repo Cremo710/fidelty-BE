@@ -1,4 +1,5 @@
 import { databaseService } from "./databaseService.js";
+import { pruneUnregisteredTokens, type ExpoPushTicket } from "../utils/expoPush.js";
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const EXPO_MESSAGE_LIMIT = 100;
@@ -55,9 +56,8 @@ class OfferNotificationService {
             continue;
           }
 
-          const payload = await response.json() as {
-            data?: Array<{ status: string; message?: string }>;
-          };
+          const payload = await response.json() as { data?: ExpoPushTicket[] };
+          await pruneUnregisteredTokens(batch.map((m) => m.to), payload.data || []);
           (payload.data || []).forEach((ticket) => {
             if (ticket.status !== "ok") {
               console.warn("Expo Push nuova offerta rifiutata:", ticket.message || "errore sconosciuto");

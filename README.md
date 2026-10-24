@@ -24,6 +24,27 @@ The server listens on `http://localhost:4000`.
 
 CORS is configured to allow requests from localhost origins (Expo web uses `http://localhost:19006`) and native (no-origin) during development.
 
+## Database e migration
+
+Lo schema è definito solo nei file SQL di `src/migrations/` (`001_baseline_schema.sql`, `003_…` … `011_timestamptz.sql`).
+All'avvio il server esegue il runner (`src/migrations/runner.ts`), che:
+
+1. crea la tabella di registro `schema_migrations`;
+2. applica in ordine di nome i file non ancora registrati, ciascuno in una transazione, e li registra;
+3. usa un advisory lock, quindi più istanze avviate insieme non applicano due volte la stessa migration.
+
+Per un **database nuovo** basta impostare `DATABASE_URL` e avviare il server: viene creato lo schema completo.
+Su un **database esistente** la prima esecuzione riapplica le migration (tutte idempotenti) e le registra; la 008 salta gli
+`UPDATE` su `bar_config`/`platform_config` se era già stata applicata, quindi non sovrascrive le impostazioni dei titolari.
+Per modificare lo schema aggiungere un nuovo file `NNN_descrizione.sql` (non modificare quelli già applicati).
+
+Tutte le colonne temporali sono `TIMESTAMPTZ` (migration 011). L'inizio della giornata "italiana" per i limiti giornalieri è sempre
+`date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'`.
+
+## OCR scontrini
+
+Prima del lancio eseguire `npm run ocr:benchmark` su un campione di scontrini reali (soglia 90% su importo, P.IVA e numero documento).
+
 ## Email notifiche richieste bar
 
 Quando una business request viene approvata o rifiutata, il backend puo inviare una email automatica all'utente con l'esito della richiesta e le conseguenze dell'operazione.

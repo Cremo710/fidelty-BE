@@ -423,19 +423,22 @@ export async function extractReceiptFields(image: Buffer): Promise<OcrReceiptRes
     // Pre-processing
     const processed = await preprocessImage(image);
 
-    // Chiamata Vision con timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15_000);
+    // Chiamata Vision con timeout (race: il client non accetta un AbortSignal)
+    const VISION_TIMEOUT_MS = 15_000;
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("OCR_TIMEOUT")), VISION_TIMEOUT_MS);
+    });
 
     let rawText = "";
     try {
-      const [result] = await client.documentTextDetection({
-        image: { content: processed.toString("base64") },
-      });
-      console.log("Raw OCR result:", result);
+      const [result] = await Promise.race([
+        client.documentTextDetection({ image: { content: processed.toString("base64") } }),
+        timeoutPromise,
+      ]);
       rawText = result.fullTextAnnotation?.text ?? "";
     } finally {
-      clearTimeout(timeoutId);
+      if (timeoutId) clearTimeout(timeoutId);
     }
 
     if (!rawText) return { ...nullResult, durationMs: Date.now() - startMs };

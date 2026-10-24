@@ -1,4 +1,5 @@
 import { databaseService } from "./databaseService.js";
+import { pruneUnregisteredTokens, type ExpoPushTicket } from "../utils/expoPush.js";
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
@@ -46,8 +47,9 @@ class PointsTransferNotificationService {
         return;
       }
 
-      const result = await response.json() as { data?: Array<{ status: string; message?: string }> };
+      const result = await response.json() as { data?: ExpoPushTicket[] };
       const tickets = result.data || [];
+      await pruneUnregisteredTokens(tokenResult.rows.map(({ token }) => token), tickets);
       tickets.forEach((ticket) => {
         if (ticket.status !== "ok") {
           console.warn("Expo Push trasferimento rifiutata:", ticket.message || "errore sconosciuto");

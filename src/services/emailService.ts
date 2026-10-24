@@ -537,6 +537,20 @@ class EmailService {
       kind: "reset password",
     });
   }
+  async sendPlainTextEmail(input: { recipientEmail: string; subject: string; text: string }): Promise<EmailSendResult> {
+    const escaped = input.text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    return this.sendWithDefaultSender({
+      recipientEmail: input.recipientEmail,
+      subject: input.subject,
+      html: `<pre style="font-family:monospace;font-size:13px;line-height:1.5;">${escaped}</pre>`,
+      text: input.text,
+      kind: "testo semplice",
+    });
+  }
 }
 
 export const emailService = new EmailService();

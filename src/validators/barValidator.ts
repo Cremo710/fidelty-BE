@@ -1,11 +1,55 @@
 import { z } from "zod";
+import { isValidItalianVat } from "../utils/vat.js";
+
+// Stringa vuota -> null per i campi opzionali
+const emptyToNull = (value: unknown) =>
+  typeof value === "string" && value.trim() === "" ? null : value;
+
+const optionalHttpUrl =  (max: number, label: string) =>
+  z.preprocess(
+    emptyToNull,
+    z
+      .string()
+      .trim()
+      .max(max, `${label} non può superare ${max} caratteri`)
+      .regex(/^https?:\/\/\S+$/i, `${label} deve iniziare con http:// o https://`)
+      .nullable()
+      .optional(),
+  );
+
+const contactFields = {
+  contactEmail: z.preprocess(
+    emptyToNull,
+    z
+      .string()
+      .trim()
+      .max(255, "Email non può superare 255 caratteri")
+      .email("Email di contatto non valida")
+      .nullable()
+      .optional(),
+  ),
+  phone: z.preprocess(
+    emptyToNull,
+    z
+      .string()
+      .trim()
+      .regex(/^[\d\s\+\-\(\)]{6,20}$/, "Numero di telefono non valido")
+      .nullable()
+      .optional(),
+  ),
+  instagram: optionalHttpUrl(255, "Instagram"),
+  facebook: optionalHttpUrl(255, "Facebook"),
+  tiktok: optionalHttpUrl(255, "TikTok"),
+  website: optionalHttpUrl(500, "Sito web"),
+};
 
 // Schema di validazione per la registrazione del bar
 export const barRegistrationSchema = z.object({
   piva: z
     .string()
+    .trim()
     .regex(/^\d{11}$/, "Partita IVA deve contenere esattamente 11 cifre numeriche")
-    .trim(),
+    .refine(isValidItalianVat, "Partita IVA non valida (cifra di controllo errata)"),
   barName: z
     .string()
     .min(2, "Nome del bar deve avere almeno 2 caratteri")
@@ -21,42 +65,7 @@ export const barRegistrationSchema = z.object({
     .min(5, "Indirizzo deve avere almeno 5 caratteri")
     .max(500, "Indirizzo non può superare 500 caratteri")
     .trim(),
-  contactEmail: z
-    .string()
-    .email("Email di contatto non valida")
-    .max(255, "Email non può superare 255 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
-  phone: z
-    .string()
-    .regex(/^[\d\s\+\-\(\)]{6,20}$/, "Numero di telefono non valido")
-    .optional()
-    .nullable(),
-  instagram: z
-    .string()
-    .max(255, "Instagram non può superare 255 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
-  facebook: z
-    .string()
-    .max(255, "Facebook non può superare 255 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
-  tiktok: z
-    .string()
-    .max(255, "TikTok non può superare 255 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
-  website: z
-    .string()
-    .max(500, "Sito web non può superare 500 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
+  ...contactFields,
   coverImageUrl: z
     .string()
     .url("URL immagine non valido")
@@ -119,42 +128,7 @@ export const barUpdateSchema = z.object({
     .max(500, "Indirizzo non può superare 500 caratteri")
     .trim()
     .optional(),
-  contactEmail: z
-    .string()
-    .email("Email di contatto non valida")
-    .max(255, "Email non può superare 255 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
-  phone: z
-    .string()
-    .regex(/^[\d\s\+\-\(\)]{6,20}$/, "Numero di telefono non valido")
-    .optional()
-    .nullable(),
-  instagram: z
-    .string()
-    .max(255, "Instagram non può superare 255 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
-  facebook: z
-    .string()
-    .max(255, "Facebook non può superare 255 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
-  tiktok: z
-    .string()
-    .max(255, "TikTok non può superare 255 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
-  website: z
-    .string()
-    .max(500, "Sito web non può superare 500 caratteri")
-    .trim()
-    .optional()
-    .nullable(),
+  ...contactFields,
 });
 
 export type BarUpdateInput = z.infer<typeof barUpdateSchema>;

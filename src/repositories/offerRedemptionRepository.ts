@@ -36,6 +36,7 @@ export interface OfferRedemptionActivityDTO extends OfferRedemptionWithOfferDTO 
 export interface LoyaltyPointsSnapshot {
   loyaltyCardId: number;
   totalPoints: number;
+  lifetimePoints: number;
   frozenPoints: number;
   availablePoints: number;
 }
@@ -64,6 +65,7 @@ export class OfferRedemptionRepository {
         SELECT
           lc.id AS loyalty_card_id,
           lc.points AS total_points,
+          lc.lifetime_points,
           COALESCE(frozen.frozen_points, 0)::int AS frozen_points,
           GREATEST(lc.points - COALESCE(frozen.frozen_points, 0)::int, 0) AS available_points
         FROM loyalty_cards lc
@@ -90,6 +92,7 @@ export class OfferRedemptionRepository {
     return {
       loyaltyCardId: Number(row.loyalty_card_id),
       totalPoints: Number(row.total_points) || 0,
+      lifetimePoints: Number(row.lifetime_points) || 0,
       frozenPoints: Number(row.frozen_points) || 0,
       availablePoints: Number(row.available_points) || 0,
     };

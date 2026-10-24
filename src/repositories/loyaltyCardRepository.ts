@@ -25,11 +25,13 @@ export interface LoyaltyCardWithBar {
   latitude: number | null;
   longitude: number | null;
   totalPoints: number;
+  lifetimePoints: number;
   frozenPoints: number;
   availablePoints: number;
   receiptsCount: number;
   lastReceiptAt: Date | null;
   createdAt: Date;
+  barDeleted: boolean;
 }
 
 /**
@@ -72,10 +74,11 @@ export class LoyaltyCardRepository {
     pointsToAdd: number,
   ): Promise<number> {
     const query = `
-      INSERT INTO loyalty_cards (user_id, bar_id, points, receipts_count, last_receipt_at, updated_at)
-      VALUES ($1, $2, $3, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO loyalty_cards (user_id, bar_id, points, lifetime_points, receipts_count, last_receipt_at, updated_at)
+      VALUES ($1, $2, $3, $3, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (user_id, bar_id) DO UPDATE SET
         points = loyalty_cards.points + EXCLUDED.points,
+        lifetime_points = loyalty_cards.lifetime_points + EXCLUDED.lifetime_points,
         receipts_count = loyalty_cards.receipts_count + 1,
         last_receipt_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
@@ -119,6 +122,8 @@ export class LoyaltyCardRepository {
           b.address,
           ${geoSelect},
           lc.points AS total_points,
+          lc.lifetime_points,
+          (b.deleted_at IS NOT NULL) AS bar_deleted,
           COALESCE(frozen.frozen_points, 0)::int AS frozen_points,
           GREATEST(lc.points - COALESCE(frozen.frozen_points, 0)::int, 0) AS available_points,
           lc.receipts_count,
@@ -151,6 +156,8 @@ export class LoyaltyCardRepository {
         latitude: row.latitude,
         longitude: row.longitude,
         totalPoints: Number(row.total_points) || 0,
+        lifetimePoints: Number(row.lifetime_points) || 0,
+        barDeleted: Boolean(row.bar_deleted),
         frozenPoints: Number(row.frozen_points) || 0,
         availablePoints: Number(row.available_points) || 0,
         receiptsCount: Number(row.receipts_count) || 0,

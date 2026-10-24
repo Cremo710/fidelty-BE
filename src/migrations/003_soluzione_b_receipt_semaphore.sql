@@ -29,16 +29,7 @@ ALTER TABLE consumption_requests
   ADD CONSTRAINT consumption_requests_status_check
     CHECK (status IN ('pending', 'approved', 'rejected', 'credited'));
 
--- 4. Partial unique index: (code, bar, calendar-day) — NULL codes are excluded
-CREATE UNIQUE INDEX IF NOT EXISTS uidx_consumption_requests_receipt_bar_day
-  ON consumption_requests (
-    receipt_code_block1,
-    receipt_code_block2,
-    bar_id,
-    date_trunc('day', created_at AT TIME ZONE 'Europe/Rome')
-  )
-  WHERE receipt_code_block1 IS NOT NULL
-    AND receipt_code_block2 IS NOT NULL
-    AND status != 'rejected';
+-- 4. L'indice univoco parziale (codice, bar, giorno) è creato nella migration 011,
+--    dopo la conversione a TIMESTAMPTZ (l'espressione richiede una colonna TIMESTAMPTZ per essere IMMUTABLE).
 
 COMMIT;
