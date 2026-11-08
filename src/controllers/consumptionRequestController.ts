@@ -353,6 +353,8 @@ export class ConsumptionRequestController {
   // ── Passo 1 OCR: ricevi foto, estrai campi, persisti sessione ─────────────
   async uploadReceiptForOcr(request: FastifyRequest, reply: FastifyReply) {
     try {
+      request.log.info({ event: "receipt_ocr_controller_entry" });
+
       // Opportunistic cleanup: evita accumulo immagini OCR mai confermate
       this.cleanupExpiredUnusedOcrSessions().catch((cleanupError) => {
         console.warn("⚠️ Cleanup sessioni OCR scadute fallito:", (cleanupError as Error).message);
@@ -369,6 +371,7 @@ export class ConsumptionRequestController {
       const fields: Record<string, string> = {};
 
       const parts = request.parts();
+      request.log.info({ event: "receipt_ocr_multipart_parse_start" });
       for await (const part of parts) {
         if (part.type === "field") {
           fields[part.fieldname] = String(part.value).trim();
@@ -508,7 +511,10 @@ export class ConsumptionRequestController {
         },
       });
     } catch (error) {
-      console.error("❌ Errore consumptionRequestController.ts:", error);
+      request.log.error({
+        event: "receipt_ocr_controller_failed",
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
       return reply.status(500).send({ success: false, error: "Errore interno del server", code: "OCR_UPLOAD_ERROR" });
     }
   }

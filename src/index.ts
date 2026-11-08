@@ -7,6 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import { backfillBarCoordinates } from "./utils/geocode.js";
 import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
+import { socialAuthController } from "./controllers/socialAuthController.js";
 import { loyaltyCardController } from "./controllers/loyaltyCardController.js";
 import { barController } from "./controllers/barController.js";
 import { userRepository } from "./repositories/userRepository.js";
@@ -127,6 +128,10 @@ async function createServer(): Promise<FastifyInstance> {
   // User login endpoint
   app.post("/api/auth/login", strictLimit(5), async (request, reply) => {
     return authController.login(request, reply);
+  });
+
+  app.post("/api/auth/social", strictLimit(10), async (request, reply) => {
+    return socialAuthController.login(request, reply);
   });
 
   app.post("/api/auth/verify-email/resend", strictLimit(5), async (request, reply) => {
@@ -363,9 +368,26 @@ async function createServer(): Promise<FastifyInstance> {
   });
 
   // Passo 1 OCR: carica foto scontrino, estrai campi, persisti sessione
-  app.post("/api/consumption-requests/ocr", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return consumptionRequestController.uploadReceiptForOcr(request, reply);
-  });
+  app.post(
+    "/api/consumption-requests/ocr",
+    {
+      onRequest: [
+        async (request) => {
+          request.log.info({ event: "receipt_ocr_request_received" });
+        },
+        authenticateToken,
+      ],
+      onResponse: async (request, reply) => {
+        request.log.info({
+          event: "receipt_ocr_response",
+          statusCode: reply.statusCode,
+        });
+      },
+    },
+    async (request, reply) => {
+      return consumptionRequestController.uploadReceiptForOcr(request, reply);
+    },
+  );
 
   app.get("/api/consumption-requests/my", { onRequest: [authenticateToken] }, async (request, reply) => {
     return consumptionRequestController.listForRequester(request, reply);
@@ -560,4 +582,3 @@ if (isMain) {
     process.exit(1);
   });
 }
-
