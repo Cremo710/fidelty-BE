@@ -2,8 +2,11 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { config } from "dotenv";
 import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
+import { backfillBarCoordinates } from "./utils/geocode.js";
 import { databaseService } from "./services/databaseService.js";
 import { authController } from "./controllers/authController.js";
+import { socialAuthController } from "./controllers/socialAuthController.js";
 import { loyaltyCardController } from "./controllers/loyaltyCardController.js";
 import { barController } from "./controllers/barController.js";
 import { userRepository } from "./repositories/userRepository.js";
@@ -14,8 +17,11 @@ import { friendsController } from "./controllers/friendsController.js";
 import { businessRequestController } from "./controllers/businessRequestController.js";
 import { consumptionRequestController } from "./controllers/consumptionRequestController.js";
 import { authenticateToken } from "./middleware/authenticateToken.js";
+import { requireAdmin } from "./utils/admin.js";
+import { requireSecret } from "./utils/env.js";
 import { barConfigController } from "./controllers/barConfigController.js";
 import { adminController } from "./controllers/adminController.js";
+import { geoController } from "./controllers/geoController.js";
 import pg from "pg";
 const { Client } = pg;
 // ==================== CONFIGURATION ====================
@@ -40,6 +46,7 @@ function getAllowedCorsOrigins() {
 // Create Fastify server
 async function createServer() {
     const app = Fastify({
+        trustProxy: true,
         logger: {
             level: CONFIG.nodeEnv === "development" ? "info" : "warn",
             // Formattazione di base per lo sviluppo
@@ -73,10 +80,12 @@ async function createServer() {
     // Register multipart plugin for file uploads
     await app.register(multipart, {
         limits: {
-            fileSize: 500 * 1024 * 1024, // 500MB limit (verrà compresso se > 20MB)
+            fileSize: 10 * 1024 * 1024,
+            files: 5,
         },
     });
-    // Rate limiting implementato manualmente nei controller tramite contatori
+    await app.register(rateLimit, { global: true, max: 120, timeWindow: "1 minute" });
+    const strictLimit = (max) => ({ config: { rateLimit: { max, timeWindow: "15 minutes" } } });
     // Root endpoint
     app.get("/", async () => ({
         message: "Benvenuto nel server di Loyalty Bar",
@@ -87,23 +96,26 @@ async function createServer() {
     testDatabaseConnection();
     // ==================== AUTH ENDPOINTS ====================
     // User registration endpoint
-    app.post("/api/auth/register", async (request, reply) => {
+    app.post("/api/auth/register", strictLimit(10), async (request, reply) => {
         return authController.register(request, reply);
     });
     // User login endpoint
-    app.post("/api/auth/login", async (request, reply) => {
+    app.post("/api/auth/login", strictLimit(5), async (request, reply) => {
         return authController.login(request, reply);
     });
-    app.post("/api/auth/verify-email/resend", async (request, reply) => {
+    app.post("/api/auth/social", strictLimit(10), async (request, reply) => {
+        return socialAuthController.login(request, reply);
+    });
+    app.post("/api/auth/verify-email/resend", strictLimit(5), async (request, reply) => {
         return authController.resendEmailVerification(request, reply);
     });
-    app.post("/api/auth/verify-email/confirm", async (request, reply) => {
+    app.post("/api/auth/verify-email/confirm", strictLimit(10), async (request, reply) => {
         return authController.verifyEmail(request, reply);
     });
-    app.post("/api/auth/password-reset/request", async (request, reply) => {
+    app.post("/api/auth/password-reset/request", strictLimit(5), async (request, reply) => {
         return authController.requestPasswordReset(request, reply);
     });
-    app.post("/api/auth/password-reset/confirm", async (request, reply) => {
+    app.post("/api/auth/password-reset/confirm", strictLimit(10), async (request, reply) => {
         return authController.confirmPasswordReset(request, reply);
     });
     // User logout endpoint
@@ -118,9 +130,6 @@ async function createServer() {
     app.get("/api/auth/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
         return authController.getProfile(request, reply);
     });
-    app.get("/api/auth/profile/ranking", { onRequest: [authenticateToken] }, async (request, reply) => {
-        return authController.getRanking(request, reply);
-    });
     // Upload/update profile photo (protected route)
     app.patch("/api/auth/profile-photo", { onRequest: [authenticateToken] }, async (request, reply) => {
         return authController.uploadProfilePhoto(request, reply);
@@ -131,18 +140,10 @@ async function createServer() {
     });
     // ==================== USER SEARCH ENDPOINTS ====================
     // Search user by public_id (protected route)
-    app.get("/api/users/search", { onRequest: [authenticateToken] }, async (request, reply) => {
+    app.get("/api/users/search", { onRequest: [authenticateToken], config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
         return authController.searchByPublicId(request, reply);
     });
     // ==================== BAR ENDPOINTS ====================
-    // Bar registration endpoint (protected route)
-    app.post("/api/bar/registration", { onRequest: [authenticateToken] }, async (request, reply) => {
-        return barController.register(request, reply);
-    });
-    // Complete bar registration - atomic, no partial data (protected route)
-    app.post("/api/bar/complete-registration", { onRequest: [authenticateToken] }, async (request, reply) => {
-        return barController.completeRegistration(request, reply);
-    });
     // Get bar profile (protected route)
     app.get("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
         return barController.getBarByUser(request, reply);
@@ -256,7 +257,7 @@ async function createServer() {
     });
     // ==================== BUSINESS REQUESTS ENDPOINTS ====================
     // Public endpoint: create bar registration request from website (no auth required)
-    app.post("/api/business-requests/public", async (request, reply) => {
+    app.post("/api/business-requests/public", strictLimit(10), async (request, reply) => {
         return businessRequestController.createFromSite(request, reply);
     });
     // Create a new business request (with optional document upload)
@@ -268,23 +269,36 @@ async function createServer() {
         return businessRequestController.getMyRequest(request, reply);
     });
     // List all business requests (admin)
-    app.get("/api/business-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
+    app.get("/api/business-requests", { onRequest: [authenticateToken, requireAdmin] }, async (request, reply) => {
         return businessRequestController.listAll(request, reply);
     });
     // Approve or reject a business request (admin, explicit decision endpoint)
-    app.patch("/api/business-requests/:id/decision", { onRequest: [authenticateToken] }, async (request, reply) => {
+    app.patch("/api/business-requests/:id/decision", { onRequest: [authenticateToken, requireAdmin] }, async (request, reply) => {
         return businessRequestController.updateStatus(request, reply);
     });
     // Approve or reject a business request (admin, backward-compatible generic endpoint)
-    app.patch("/api/business-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+    app.patch("/api/business-requests/:id", { onRequest: [authenticateToken, requireAdmin] }, async (request, reply) => {
         return businessRequestController.updateStatus(request, reply);
     });
     // ==================== CONSUMPTION REQUESTS ENDPOINTS ====================
     app.post("/api/consumption-requests", { onRequest: [authenticateToken] }, async (request, reply) => {
         return consumptionRequestController.create(request, reply);
     });
-    // Passo 1 OCR: carica foto scontrino, estrai campi, persisti sessione (gated da ocr_enabled)
-    app.post("/api/consumption-requests/ocr", { onRequest: [authenticateToken] }, async (request, reply) => {
+    // Passo 1 OCR: carica foto scontrino, estrai campi, persisti sessione
+    app.post("/api/consumption-requests/ocr", {
+        onRequest: [
+            async (request) => {
+                request.log.info({ event: "receipt_ocr_request_received" });
+            },
+            authenticateToken,
+        ],
+        onResponse: async (request, reply) => {
+            request.log.info({
+                event: "receipt_ocr_response",
+                statusCode: reply.statusCode,
+            });
+        },
+    }, async (request, reply) => {
         return consumptionRequestController.uploadReceiptForOcr(request, reply);
     });
     app.get("/api/consumption-requests/my", { onRequest: [authenticateToken] }, async (request, reply) => {
@@ -311,11 +325,22 @@ async function createServer() {
     app.patch("/api/bar/config", { onRequest: [authenticateToken] }, async (request, reply) => {
         return barConfigController.updateConfig(request, reply);
     });
+    // ==================== GEO ENDPOINTS (proxy Google, chiave solo lato server) ====================
+    const geoLimit = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
+    app.get("/api/geo/autocomplete", { onRequest: [authenticateToken], ...geoLimit }, async (request, reply) => {
+        return geoController.autocomplete(request, reply);
+    });
+    app.get("/api/geo/place", { onRequest: [authenticateToken], ...geoLimit }, async (request, reply) => {
+        return geoController.placeDetails(request, reply);
+    });
+    app.get("/api/geo/geocode", { onRequest: [authenticateToken], ...geoLimit }, async (request, reply) => {
+        return geoController.geocode(request, reply);
+    });
     // ==================== ADMIN ENDPOINTS ====================
-    app.post("/api/admin/revoke-points", { onRequest: [authenticateToken] }, async (request, reply) => {
+    app.post("/api/admin/revoke-points", { onRequest: [authenticateToken, requireAdmin] }, async (request, reply) => {
         return adminController.revokePoints(request, reply);
     });
-    app.get("/api/admin/pilot-metrics", { onRequest: [authenticateToken] }, async (request, reply) => {
+    app.get("/api/admin/pilot-metrics", { onRequest: [authenticateToken, requireAdmin] }, async (request, reply) => {
         return adminController.getPilotMetrics(request, reply);
     });
     app.get("/api/loyalty-cards/my", { onRequest: [authenticateToken] }, async (request, reply) => {
@@ -374,6 +399,10 @@ function setupHooks(app) {
 async function startServer() {
     try {
         console.log("🚀 Avvio server...");
+        const secrets = ["JWT_SECRET", "REFRESH_TOKEN_SECRET", "OFFER_REDEMPTION_SECRET"].map(requireSecret);
+        if (new Set(secrets).size !== secrets.length) {
+            throw new Error("JWT_SECRET, REFRESH_TOKEN_SECRET e OFFER_REDEMPTION_SECRET devono essere diversi tra loro");
+        }
         // Create server instance
         const app = await createServer();
         console.log("✅ Server creato");
@@ -387,6 +416,10 @@ async function startServer() {
         catch (err) {
             console.warn("⚠️ Backfill public_id fallito (non bloccante):", err);
         }
+        // Geocodifica una tantum dei bar senza coordinate (evita il geocoding a ogni GET /api/bars)
+        backfillBarCoordinates()
+            .then((count) => count > 0 && console.log(`📍 Coordinate salvate per ${count} bar`))
+            .catch((err) => console.warn("⚠️ Backfill coordinate bar fallito (non bloccante):", err));
         // Setup hooks
         setupHooks(app);
         // Start listening

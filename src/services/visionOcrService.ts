@@ -2,10 +2,9 @@
  * visionOcrService — Fase 1
  * Estrae i campi rilevanti da una foto di scontrino usando Google Cloud Vision.
  *
- * Sicurezza: ogni parser fallisce silenziosamente e in modo indipendente.
- * Un campo mancante NON è un'eccezione — è { value: null, confidence: 0 }.
- * Il fallimento totale del servizio NON è un'eccezione — è un risultato tutto-null
- * che attiva il percorso manuale nel controller.
+ * I parser dei singoli campi falliscono indipendentemente: un campo mancante
+ * è { value: null, confidence: 0 }. Errori di servizio e timeout invece propagano
+ * al controller, che impedisce la persistenza e restituisce un errore applicativo.
  */
 
 import ImageAnnotatorClient from "@google-cloud/vision";
@@ -42,7 +41,7 @@ export interface ParseAmountOptions {
 export interface OcrReceiptResult {
   amount:     AmountField;        // in euro
   vatNumber:  OcrField<string>;   // 11 cifre
-  docId:      OcrField<string>;   // formato XXXX-XXXX
+  docId:      OcrField<string>;   // formato XXXX-XXXX oppure progressivo XXXX
   date:       OcrField<string>;   // ISO yyyy-mm-dd
   rawText:    string;
   durationMs: number;
@@ -331,56 +330,107 @@ function parseVatNumber(text: string): OcrField<string> {
   return { value: null, confidence: 0, raw: null };
 }
 
-// ─── Parser: docId (numero documento scontrino) ────────────────────────────
+// All supported labels are kept here so new receipt formats can be added centrally.
+export const DOC_ID_PATTERNS = [
+  { rule: "numbered_document", label: /\bNUM(?:ERO)?\.?\s*DOC(?:UMENTO)?\.?\b/i, priority: 120, allowSingle: true },
+  { rule: "document_label", label: /\bD[O0]C(?:UMENT[O0])?\b/i, priority: 110, allowSingle: true },
+  { rule: "receipt_label", label: /\bSCONTRINO(?:\s+FISCALE)?\b/i, priority: 105, allowSingle: true },
+  { rule: "generic_number_label", label: /\b(?:N(?:UM(?:ERO)?)?\.?|NR\.?|N[°º])\s*/i, priority: 65, allowSingle: true },
+] as const;
 
-const DOC_ID_LABEL_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)/i;
-const DOC_ID_STRONG_LABEL_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)\s*(?:N\.?|NO\.?|NUM\.?|N°)/i;
-const DOC_ID_RE = /(?:DOCUMENTO|DOC|N\.?\s*DOC\.?)\s*(?:N\.?|NO\.?|NUM\.?|N°)\s*([0-9A-Z]{4})\s*[-\/]\s*([0-9A-Z]{4})/i;
-const DOC_ID_SPLIT_RE = /\b([0-9A-Z]{4})\s*[-\/\s]\s*([0-9A-Z]{4})\b/;
+const DOC_ID_BLOCK_RE = /([0-9OILSB]{4})\s*(?:([-\/.])|(\s+))\s*([0-9OILSB]{4})/gi;
+const DOC_ID_SINGLE_RE = /\b([0-9OILSB]{4})\b/gi;
+const DOC_ID_EXCLUDED_LINE_RE = /\b(?:P\.?\s*IVA|RT\b|M\.?\s*\d|OP\.?\s*\d|CAP\b|TEL(?:EFONO)?|TELEFONO|PREZZO|IMPORTO|TOTALE|IVA\b)\b|\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b|\b\d{1,2}:\d{2}\b/i;
+const OCR_DIGIT_MAP: Record<string, string> = { O: "0", I: "1", L: "1", S: "5", B: "8" };
 
-function extractDocIdFromLine(line: string): OcrField<string> {
-  const directMatch = line.match(DOC_ID_RE);
-  if (directMatch) {
-    return {
-      value: `${directMatch[1]}-${directMatch[2]}`,
-      confidence: 1,
-      raw: directMatch[0],
-    };
-  }
-
-  const splitMatch = line.match(DOC_ID_SPLIT_RE);
-  if (splitMatch && DOC_ID_STRONG_LABEL_RE.test(line) && /\d/.test(`${splitMatch[1]}${splitMatch[2]}`)) {
-    return {
-      value: `${splitMatch[1]}-${splitMatch[2]}`,
-      confidence: 0.9,
-      raw: splitMatch[0],
-    };
-  }
-
-  return { value: null, confidence: 0, raw: null };
+export interface DocIdCandidate {
+  value: string;
+  raw: string;
+  rule: string;
+  score: number;
 }
 
-function parseDocId(text: string): OcrField<string> {
+function normalizeDocIdPart(part: string): string {
+  return part.toUpperCase().replace(/[OILSB]/g, (char) => OCR_DIGIT_MAP[char] ?? char);
+}
+
+function isExcludedDocIdLine(line: string): boolean {
+  return DOC_ID_EXCLUDED_LINE_RE.test(line);
+}
+
+export function extractDocId(text: string): DocIdCandidate | null {
+  if (!text || typeof text !== "string") return null;
   const lines = normalizeReceiptLines(text);
+  const candidates: Array<DocIdCandidate & { index: number }> = [];
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (!DOC_ID_LABEL_RE.test(line)) {
-      continue;
-    }
 
-    const lineCandidate = extractDocIdFromLine(line);
-    if (lineCandidate.value) {
-      return lineCandidate;
-    }
+    for (const pattern of DOC_ID_PATTERNS) {
+      const labelMatch = pattern.label.exec(line);
+      if (!labelMatch) continue;
 
-    const nextLineCandidate = extractDocIdFromLine(lines[index + 1] ?? "");
-    if (nextLineCandidate.value) {
-      return nextLineCandidate;
+      const labelEnd = (labelMatch.index ?? 0) + labelMatch[0].length;
+      const fragments = [
+        { text: line.slice(labelEnd), distance: 0, sourceLine: line },
+        { text: lines[index + 1] ?? "", distance: 1, sourceLine: lines[index + 1] ?? "" },
+      ];
+
+      for (const fragment of fragments) {
+        if (!fragment.text.trim() || isExcludedDocIdLine(fragment.sourceLine)) continue;
+        const blockRe = new RegExp(DOC_ID_BLOCK_RE.source, "gi");
+        let blockMatch: RegExpExecArray | null;
+        while ((blockMatch = blockRe.exec(fragment.text)) !== null) {
+          const first = normalizeDocIdPart(blockMatch[1]);
+          const second = normalizeDocIdPart(blockMatch[4]);
+          if (!/^\d{4}$/.test(first) || !/^\d{4}$/.test(second)) continue;
+          const correctedCount = (blockMatch[1] + blockMatch[4]).replace(/[0-9]/g, "").length;
+          candidates.push({
+            value: `${first}-${second}`,
+            raw: blockMatch[0],
+            rule: pattern.rule,
+            score: pattern.priority + 12 - fragment.distance * 8 + Math.min(index / lines.length, 1) * 5 - correctedCount,
+            index,
+          });
+        }
+
+        if (pattern.allowSingle) {
+          const singleRe = new RegExp(DOC_ID_SINGLE_RE.source, "gi");
+          let singleMatch: RegExpExecArray | null;
+          while ((singleMatch = singleRe.exec(fragment.text)) !== null) {
+            const value = normalizeDocIdPart(singleMatch[1]);
+            if (!/^\d{4}$/.test(value)) continue;
+            const correctedCount = singleMatch[1].replace(/[0-9]/g, "").length;
+            candidates.push({
+              value,
+              raw: singleMatch[1],
+              rule: pattern.rule,
+              score: pattern.priority - 12 - fragment.distance * 8 + Math.min(index / lines.length, 1) * 5 - correctedCount,
+              index,
+            });
+          }
+        }
+      }
     }
   }
 
-  return { value: null, confidence: 0, raw: null };
+  if (candidates.length === 0) return null;
+  candidates.sort((left, right) => right.score - left.score);
+  const best = candidates[0];
+  const competing = candidates.find((candidate) => candidate.value !== best.value && best.score - candidate.score <= 8);
+  if (competing) return null;
+  const { index: _index, ...result } = best;
+  return result;
+}
+
+function parseDocId(text: string): OcrField<string> {
+  const candidate = extractDocId(text);
+  if (!candidate) return { value: null, confidence: 0, raw: null };
+  return {
+    value: candidate.value,
+    confidence: Math.min(1, Math.max(0, candidate.score / 85)),
+    raw: candidate.raw,
+  };
 }
 
 // ─── Parser: data ───────────────────────────────────────────────────────────
@@ -397,8 +447,10 @@ function parseDate(text: string): OcrField<string> {
   const year = rawYear.length === 2 ? `20${rawYear}` : rawYear;
   const iso = `${year}-${month}-${day}`;
   // Sanity check
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return { value: null, confidence: 0, raw: match[0] };
+  const d = new Date(`${iso}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== iso) {
+    return { value: null, confidence: 0, raw: match[0] };
+  }
   return { value: iso, confidence: 1, raw: match[0] };
 }
 
@@ -407,7 +459,7 @@ function parseDate(text: string): OcrField<string> {
 export async function extractReceiptFields(image: Buffer): Promise<OcrReceiptResult> {
   const startMs = Date.now();
 
-  // Risultato di fallback (tutto null): permette al flusso di degradare a manuale
+  // Nessun testo OCR viene validato e salvato dal controller.
   const nullResult: OcrReceiptResult = {
     amount:    { value: null, confidence: 0, raw: null, label: null, line: null },
     vatNumber: { value: null, confidence: 0, raw: null },
@@ -458,8 +510,9 @@ export async function extractReceiptFields(image: Buffer): Promise<OcrReceiptRes
       durationMs: Date.now() - startMs,
     };
   } catch (err) {
-    console.warn("⚠️ OCR extractReceiptFields fallito:", (err as Error).message);
-    return { ...nullResult, durationMs: Date.now() - startMs };
+    const code = err instanceof Error && err.message === "OCR_TIMEOUT" ? "OCR_TIMEOUT" : "OCR_PROCESSING_FAILED";
+    console.error("[receipt_ocr_failed]", { code });
+    throw Object.assign(new Error(code), { code });
   }
 }
 

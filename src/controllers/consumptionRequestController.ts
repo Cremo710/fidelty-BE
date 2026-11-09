@@ -11,7 +11,8 @@ import { barConfigRepository } from "../repositories/barConfigRepository.js";
 import { platformConfigRepository } from "../repositories/platformConfigRepository.js";
 import { semaphoreService } from "../services/semaphoreService.js";
 import { databaseService } from "../services/databaseService.js";
-import { extractReceiptFields } from "../services/visionOcrService.js";
+import { extractDocId, extractReceiptFields } from "../services/visionOcrService.js";
+import { isValidItalianVatNumber, validateReceiptOcr } from "../services/receiptValidation.js";
 import { deleteCloudinaryImageByUrl, getSignedCloudinaryUrl, uploadReceiptImage } from "../utils/imageUpload.js";
 
 const RECEIPT_IMAGE_RETENTION_DAYS = Number(process.env.RECEIPT_IMAGE_RETENTION_DAYS || 90);
@@ -355,11 +356,6 @@ export class ConsumptionRequestController {
     try {
       request.log.info({ event: "receipt_ocr_controller_entry" });
 
-      // Opportunistic cleanup: evita accumulo immagini OCR mai confermate
-      this.cleanupExpiredUnusedOcrSessions().catch((cleanupError) => {
-        console.warn("⚠️ Cleanup sessioni OCR scadute fallito:", (cleanupError as Error).message);
-      });
-
       const userId = (request as any).userId;
       if (!userId) {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
@@ -445,27 +441,55 @@ export class ConsumptionRequestController {
 
       // ── OCR ────────────────────────────────────────────────────────────────
       const ocrResult = await extractReceiptFields(imageBuffer);
-      const fieldsFound = {
-        amount:    ocrResult.amount.value !== null,
-        vatNumber: ocrResult.vatNumber.value !== null,
-        docId:     ocrResult.docId.value !== null,
-        date:      ocrResult.date.value !== null,
-      };
+      const docIdCandidate = extractDocId(ocrResult.rawText);
+      console.log("[receipt_ocr_result]", JSON.stringify({
+        fieldsFound: {
+          amount: ocrResult.amount.value !== null,
+          vatNumber: ocrResult.vatNumber.value !== null,
+          docId: ocrResult.docId.value !== null,
+          date: ocrResult.date.value !== null,
+        },
+        confidence: {
+          amount: ocrResult.amount.confidence,
+          vatNumber: ocrResult.vatNumber.confidence,
+          docId: ocrResult.docId.confidence,
+          date: ocrResult.date.confidence,
+        },
+        docIdRule: docIdCandidate?.rule ?? null,
+        docIdScore: docIdCandidate?.score ?? null,
+        durationMs: ocrResult.durationMs,
+        mappedFields: ["amount", "docId", "date", "vatNumber", "fieldsFound", "durationMs"],
+      }));
+      if (!ocrResult.rawText.trim()) {
+        return reply.status(422).send({
+          success: false,
+          error: "Non siamo riusciti a leggere lo scontrino. Scatta una nuova foto più nitida e illuminata.",
+          code: "RECEIPT_OCR_NO_TEXT",
+        });
+      }
+
+      const validation = validateReceiptOcr(ocrResult);
+      if (!validation.valid) {
+        return reply.status(422).send({
+          success: false,
+          error: "Non è stato possibile verificare i dati obbligatori dello scontrino. Controlla che la foto sia nitida e riprova.",
+          code: validation.code,
+        });
+      }
+
+      const normalizedReceipt = validation.data;
+      const fieldsFound = normalizedReceipt.fieldsFound;
       const mappedOcrData = {
-        amount:    ocrResult.amount.value,
-        docId:     ocrResult.docId.value,
-        date:      ocrResult.date.value,
-        vatNumber: ocrResult.vatNumber.value,
+        amount: normalizedReceipt.amount,
+        docId: normalizedReceipt.docId,
+        date: normalizedReceipt.receiptDate,
+        vatNumber: normalizedReceipt.vatNumber,
         fieldsFound,
         durationMs: ocrResult.durationMs,
       };
-      console.log("[receipt_ocr_result]", JSON.stringify({
-        ocrResult,
-        mapped: mappedOcrData,
-      }));
 
       // ── Gate P.IVA: blocca prima di qualsiasi persistenza/accredito ─────────
-      const extractedVatNumber = ocrResult.vatNumber.value;
+      const extractedVatNumber = normalizedReceipt.vatNumber;
       const gate = await evaluatePivaBarGate(extractedVatNumber, (piva) => barRepository.findByPiva(piva));
       if (gate.blocked) {
         return reply.status(gate.status).send({
@@ -475,6 +499,25 @@ export class ConsumptionRequestController {
         });
       }
       const barForVatNumber = gate.bar;
+
+      const duplicateReceipt = await pool.query(
+        `SELECT 1 FROM receipt_ocr_identities
+         WHERE vat_number = $1 AND doc_id = $2 AND receipt_date = $3 AND amount = $4
+         LIMIT 1`,
+        [normalizedReceipt.vatNumber, normalizedReceipt.docId, normalizedReceipt.receiptDate, normalizedReceipt.amount],
+      );
+      if (duplicateReceipt.rows.length > 0) {
+        return reply.status(409).send({
+          success: false,
+          error: "Questo scontrino risulta già utilizzato.",
+          code: "DUPLICATE_RECEIPT_IDENTITY",
+        });
+      }
+
+      // Opportunistic cleanup runs only after a successful OCR validation.
+      this.cleanupExpiredUnusedOcrSessions().catch((cleanupError) => {
+        console.warn("⚠️ Cleanup sessioni OCR scadute fallito:", (cleanupError as Error).message);
+      });
 
       // ── Upload Cloudinary ──────────────────────────────────────────────────
       let imageUrl: string | null = null;
@@ -498,10 +541,10 @@ export class ConsumptionRequestController {
           sessionId,
           userId,
           bar.id,
-          ocrResult.amount.value ?? null,
-          ocrResult.vatNumber.value ?? null,
-          ocrResult.docId.value ?? null,
-          ocrResult.date.value ?? null,
+          normalizedReceipt.amount,
+          normalizedReceipt.vatNumber,
+          normalizedReceipt.docId,
+          normalizedReceipt.receiptDate,
           imageSha256,
           imageUrl,
           ocrResult.rawText.slice(0, 4000), // limita dimensione raw
@@ -522,6 +565,21 @@ export class ConsumptionRequestController {
         event: "receipt_ocr_controller_failed",
         errorName: error instanceof Error ? error.name : "UnknownError",
       });
+      const errorCode = (error as { code?: string } | null)?.code;
+      if (errorCode === "OCR_TIMEOUT") {
+        return reply.status(504).send({
+          success: false,
+          error: "La lettura dello scontrino ha impiegato troppo tempo. Riprova con una nuova foto.",
+          code: "OCR_TIMEOUT",
+        });
+      }
+      if (errorCode === "OCR_PROCESSING_FAILED") {
+        return reply.status(503).send({
+          success: false,
+          error: "Il servizio di lettura dello scontrino non è disponibile. Riprova tra poco.",
+          code: "OCR_PROCESSING_FAILED",
+        });
+      }
       return reply.status(500).send({ success: false, error: "Errore interno del server", code: "OCR_UPLOAD_ERROR" });
     }
   }
@@ -554,6 +612,7 @@ export class ConsumptionRequestController {
       let ocrSession: {
         id: string; user_id: string; bar_id: string;
         amount: string | null; doc_id: string | null;
+        vat_number: string | null; receipt_date: string | Date | null;
         image_url: string | null;
       } | null = null;
 
@@ -594,6 +653,26 @@ export class ConsumptionRequestController {
         return reply.status(400).send({ success: false, error: "Sessione OCR non trovata", code: "OCR_SESSION_NOT_FOUND" });
       }
 
+      const sessionDocId = ocrSession.doc_id?.trim() ?? "";
+      const sessionVatNumber = ocrSession.vat_number?.replace(/\D/g, "") ?? "";
+      const sessionDate = ocrSession.receipt_date
+        ? new Date(ocrSession.receipt_date).toISOString().slice(0, 10)
+        : "";
+      if (!/^(\d{4}-\d{4}|\d{4})$/.test(sessionDocId)) {
+        return reply.status(422).send({
+          success: false,
+          error: "Non siamo riusciti a leggere il numero del documento. Scatta nuovamente lo scontrino.",
+          code: "RECEIPT_DOC_ID_NOT_FOUND",
+        });
+      }
+      if (!isValidItalianVatNumber(sessionVatNumber) || !sessionDate) {
+        return reply.status(422).send({
+          success: false,
+          error: "La sessione OCR non contiene dati di verifica validi. Scatta nuovamente lo scontrino.",
+          code: "RECEIPT_OCR_SESSION_INVALID",
+        });
+      }
+
       // ── Resolve bar (by barId o dal barId della sessione OCR) ───────────────
       const bar = await barRepository.findById(ocrSession.bar_id);
 
@@ -610,7 +689,6 @@ export class ConsumptionRequestController {
       let receiptCodeBlock1: string | null = null;
       let receiptCodeBlock2: string | null = null;
 
-      // Il doc_id dalla sessione potrebbe essere null — il partial index lo gestisce
       if (ocrSession.doc_id && RECEIPT_CODE_RE.test(ocrSession.doc_id)) {
         [receiptCodeBlock1, receiptCodeBlock2] = ocrSession.doc_id.split("-");
       }
@@ -712,6 +790,23 @@ export class ConsumptionRequestController {
       let created: ConsumptionRequestDTO;
       let requester: Awaited<ReturnType<typeof userRepository.findById>>;
       try {
+        const identityResult = await client.query(
+          `INSERT INTO receipt_ocr_identities (session_id, vat_number, doc_id, receipt_date, amount)
+           SELECT id, vat_number, doc_id, receipt_date, amount
+           FROM receipt_ocr_sessions
+           WHERE id = $1 AND consumed_at IS NULL
+           RETURNING session_id`,
+          [ocrSession.id],
+        );
+        if (identityResult.rowCount !== 1) {
+          await client.query("ROLLBACK");
+          return reply.status(409).send({
+            success: false,
+            error: "Questo scontrino risulta già utilizzato.",
+            code: "DUPLICATE_RECEIPT_IDENTITY",
+          });
+        }
+
         requester = await userRepository.findById(userId);
         const insertResult = await client.query(
           `INSERT INTO consumption_requests (
@@ -758,24 +853,37 @@ export class ConsumptionRequestController {
           }
         }
 
+        const consumedResult = await client.query(
+          "UPDATE receipt_ocr_sessions SET consumed_at = NOW() WHERE id = $1 AND consumed_at IS NULL",
+          [ocrSession.id],
+        );
+        if (consumedResult.rowCount !== 1) {
+          throw Object.assign(new Error("OCR_SESSION_ALREADY_CONSUMED"), { code: "OCR_SESSION_ALREADY_CONSUMED" });
+        }
+
         await client.query("COMMIT");
       } catch (txErr) {
         await client.query("ROLLBACK");
-        // Unique constraint violation on receipt code
+        if ((txErr as any)?.code === "23505" && (txErr as any)?.constraint === "uidx_receipt_ocr_identity") {
+          return reply.status(409).send({
+            success: false,
+            error: "Questo scontrino risulta già utilizzato.",
+            code: "DUPLICATE_RECEIPT_IDENTITY",
+          });
+        }
+        if ((txErr as any)?.code === "OCR_SESSION_ALREADY_CONSUMED") {
+          return reply.status(409).send({
+            success: false,
+            error: "Questa sessione OCR è già stata utilizzata.",
+            code: "OCR_SESSION_ALREADY_CONSUMED",
+          });
+        }
         if ((txErr as any)?.code === "23505" && String((txErr as any)?.constraint).includes("receipt")) {
           return reply.status(409).send({ success: false, error: "Codice scontrino già registrato per oggi in questo bar.", code: "DUPLICATE_RECEIPT_CODE" });
         }
         throw txErr;
       } finally {
         releaseClient();
-      }
-
-      // ── Marca sessione OCR come consumata ────────────────────────────────────
-      if (ocrSession) {
-        databaseService.getPool().query(
-          "UPDATE receipt_ocr_sessions SET consumed_at = NOW() WHERE id = $1",
-          [ocrSession.id],
-        ).catch(() => { /* non-critical */ });
       }
 
       // ── Notify bar (only for yellow/pending — not for red or green) ──────────
