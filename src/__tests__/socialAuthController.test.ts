@@ -28,11 +28,89 @@ vi.mock("../services/socialAuthService.js", () => ({
 }));
 
 import { SocialAuthError } from "../services/socialAuthService.js";
-import { SocialAuthController } from "../controllers/socialAuthController.js";
+import {
+  SocialAuthController,
+  socialAuthInputSchema,
+} from "../controllers/socialAuthController.js";
 
 describe("SocialAuthController", () => {
   beforeEach(() => {
     mocks.signInWithSocialIdentity.mockReset();
+  });
+
+  it("accepts Apple login fields on the first login", () => {
+    const result = socialAuthInputSchema.safeParse({
+      provider: "apple",
+      identityToken: `eyJ${"token".repeat(12)}`,
+      nonce: "private-nonce-value-123456",
+      email: "person@example.com",
+      fullName: { givenName: "Ada", familyName: "Lovelace" },
+      name: "Ada Lovelace",
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    {
+      name: null,
+      email: null,
+      fullName: null,
+    },
+    {},
+  ])(
+    "accepts missing Apple profile fields on subsequent login (%j)",
+    (optionalFields) => {
+      const result = socialAuthInputSchema.safeParse({
+        provider: "apple",
+        identityToken: `eyJ${"token".repeat(12)}`,
+        nonce: "private-nonce-value-123456",
+        ...optionalFields,
+      });
+
+      expect(result.success).toBe(true);
+    },
+  );
+
+  it("logs only validation paths, issue types, and body keys for invalid requests", async () => {
+    const requestBody = {
+      provider: "apple",
+      identityToken: "secret-token-value",
+      nonce: "short",
+      email: "not-an-email",
+      fullName: { givenName: "Secret Name" },
+    };
+    const requestLog = { error: vi.fn(), info: vi.fn() };
+    const request = {
+      body: requestBody,
+      id: "invalid-request",
+      log: requestLog,
+    } as unknown as FastifyRequest;
+    const reply = {
+      status: vi.fn().mockReturnThis(),
+      send: vi.fn().mockReturnThis(),
+    } as unknown as FastifyReply;
+
+    await new SocialAuthController().login(request, reply);
+
+    const logFields = requestLog.error.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    const serialized = JSON.stringify(logFields);
+    expect(logFields).toMatchObject({
+      stage: "request_validation",
+      bodyKeys: ["provider", "identityToken", "nonce", "email", "fullName"],
+      validationErrors: expect.arrayContaining([
+        { path: "identityToken", type: "too_small" },
+        { path: "nonce", type: "too_small" },
+        { path: "email", type: "invalid_string" },
+      ]),
+    });
+    expect(serialized).not.toContain("secret-token-value");
+    expect(serialized).not.toContain("Secret Name");
+    expect(serialized).not.toContain("not-an-email");
+    expect(serialized).not.toContain("short");
   });
 
   it("logs useful failure details while redacting sensitive values", async () => {

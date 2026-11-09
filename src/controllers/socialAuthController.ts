@@ -7,11 +7,23 @@ import {
   type SocialProvider,
 } from "../services/socialAuthService.js";
 
-const socialAuthInputSchema = z.object({
+export const socialAuthInputSchema = z.object({
   provider: z.enum(["google", "apple"]),
   identityToken: z.string().min(20),
   nonce: z.string().min(16).max(256),
-  name: z.string().trim().min(1).max(255).optional(),
+  name: z.string().trim().min(1).max(255).nullable().optional(),
+  email: z.string().email().nullable().optional(),
+  fullName: z
+    .object({
+      givenName: z.string().nullable().optional(),
+      familyName: z.string().nullable().optional(),
+      middleName: z.string().nullable().optional(),
+      namePrefix: z.string().nullable().optional(),
+      nameSuffix: z.string().nullable().optional(),
+      nickname: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 function sanitizeLogText(value: string, secrets: string[]): string {
@@ -68,6 +80,14 @@ export class SocialAuthController {
         errorCode: "INVALID_SOCIAL_AUTH_REQUEST",
         stage: "request_validation",
         reason: "SOCIAL_AUTH_REQUEST_INVALID",
+        validationErrors: parsed.error.issues.map((issue) => ({
+          path: issue.path.join("."),
+          type: issue.code,
+        })),
+        bodyKeys:
+          typeof request.body === "object" && request.body !== null
+            ? Object.keys(request.body)
+            : [],
       });
       return reply.status(400).send({
         success: false,
@@ -78,7 +98,10 @@ export class SocialAuthController {
 
     try {
       const data = await signInWithSocialIdentity({
-        ...parsed.data,
+        provider: parsed.data.provider,
+        identityToken: parsed.data.identityToken,
+        nonce: parsed.data.nonce,
+        name: parsed.data.name ?? undefined,
       });
       request.log.info({
         event: "social_auth_succeeded",
