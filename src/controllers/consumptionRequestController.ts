@@ -459,11 +459,10 @@ export class ConsumptionRequestController {
         fieldsFound,
         durationMs: ocrResult.durationMs,
       };
-      request.log.info({
-        event: "receipt_ocr_result",
+      console.log("[receipt_ocr_result]", JSON.stringify({
         ocrResult,
         mapped: mappedOcrData,
-      });
+      }));
 
       // ── Gate P.IVA: blocca prima di qualsiasi persistenza/accredito ─────────
       const extractedVatNumber = ocrResult.vatNumber.value;
