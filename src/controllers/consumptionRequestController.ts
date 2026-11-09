@@ -443,6 +443,7 @@ export class ConsumptionRequestController {
       const ocrResult = await extractReceiptFields(imageBuffer);
       const docIdCandidate = extractDocId(ocrResult.rawText);
       console.log("[receipt_ocr_result]", JSON.stringify({
+        ocrResult,
         fieldsFound: {
           amount: ocrResult.amount.value !== null,
           vatNumber: ocrResult.vatNumber.value !== null,
