@@ -24,6 +24,7 @@ import { adminController } from "./controllers/adminController.js";
 import { geoController } from "./controllers/geoController.js";
 import { barTeamController } from "./controllers/barTeamController.js";
 import { requireBarPermission } from "./utils/barPermissionGuard.js";
+import { getSocialAuthPublicConfig } from "./services/socialAuthService.js";
 import pg from "pg";
 const { Client } = pg;
 // ==================== CONFIGURATION ====================
@@ -50,7 +51,7 @@ async function createServer() {
     const app = Fastify({
         trustProxy: true,
         logger: {
-            level: CONFIG.nodeEnv === "development" ? "info" : "warn",
+            level: "info",
             // Formattazione di base per lo sviluppo
             ...(CONFIG.nodeEnv === "development" && {
                 transport: {
@@ -63,6 +64,10 @@ async function createServer() {
             }),
         },
         disableRequestLogging: CONFIG.nodeEnv === "production",
+    });
+    app.log.info({
+        event: "social_auth_config",
+        ...getSocialAuthPublicConfig(),
     });
     // Plugins
     await app.register(cors, {
