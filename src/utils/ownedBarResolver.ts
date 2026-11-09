@@ -1,5 +1,6 @@
 import { FastifyRequest } from "fastify";
-import { barRepository, type BarDTO } from "../repositories/barRepository.js";
+import type { BarDTO } from "../repositories/barRepository.js";
+import { databaseService } from "../services/databaseService.js";
 
 export async function resolveOwnedBarForRequest(request: FastifyRequest): Promise<BarDTO | null> {
   const userId = (request as any).userId;
@@ -11,15 +12,25 @@ export async function resolveOwnedBarForRequest(request: FastifyRequest): Promis
   const barId = Array.isArray(rawBarId) ? rawBarId[0] : rawBarId;
 
   if (barId) {
-    const selectedBar = await barRepository.findById(String(barId));
-    if (!selectedBar || selectedBar.user_id !== userId) {
-      return null;
-    }
-
-    return selectedBar;
+    const result = await databaseService.getPool().query(
+      `SELECT b.* FROM bars b
+       LEFT JOIN bar_team_members tm ON tm.bar_id = b.id AND tm.user_id = $2 AND tm.status = 'active'
+       WHERE b.id = $1 AND (b.user_id = $2 OR tm.user_id = $2)
+       LIMIT 1`,
+      [String(barId), userId],
+    );
+    return (result.rows[0] as BarDTO | undefined) ?? null;
   }
 
-  return barRepository.findByUserId(userId);
+  const accessible = await databaseService.getPool().query(
+    `SELECT b.* FROM bars b
+     LEFT JOIN bar_team_members tm ON tm.bar_id = b.id AND tm.user_id = $1 AND tm.status = 'active'
+     WHERE b.user_id = $1 OR tm.user_id = $1
+     ORDER BY b.created_at
+     LIMIT 2`,
+    [userId],
+  );
+  return accessible.rows.length === 1 ? accessible.rows[0] as BarDTO : null;
 }
 
 /**
@@ -31,6 +42,12 @@ export async function isBarSelectionMissing(request: FastifyRequest): Promise<bo
     return false;
   }
 
-  const ownedBars = await barRepository.findAllByUserId(userId);
-  return ownedBars.length > 1;
+  const accessibleBars = await databaseService.getPool().query(
+    `SELECT b.id FROM bars b
+     LEFT JOIN bar_team_members tm ON tm.bar_id = b.id AND tm.user_id = $1 AND tm.status = 'active'
+     WHERE b.user_id = $1 OR tm.user_id = $1
+     LIMIT 2`,
+    [userId],
+  );
+  return accessibleBars.rows.length > 1;
 }

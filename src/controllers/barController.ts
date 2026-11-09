@@ -13,6 +13,7 @@ import { openingHoursRepository } from "../repositories/openingHoursRepository.j
 import { validateCreateOfferInput } from "../validators/offerValidator.js";
 import { validateSetOpeningHoursInput } from "../validators/openingHoursValidator.js";
 import { resolveOwnedBarForRequest, isBarSelectionMissing } from "../utils/ownedBarResolver.js";
+import { barTeamService } from "../services/barTeamService.js";
 
 /**
  * Interfaccia per la risposta di Google Geocoding
@@ -270,11 +271,16 @@ export class BarController {
         return reply.status(401).send({ success: false, error: "Non autenticato", code: "UNAUTHORIZED" });
       }
 
-      const bars = await barRepository.findAllByUserId(userId);
+      const memberships = await barTeamService.listAccessibleBars(userId);
+      const barResults = await Promise.all(memberships.map(async (membership) => {
+        const bar = await barRepository.findById(membership.id);
+        return bar ? { bar, role: membership.role } : null;
+      }));
+      const bars = barResults.filter((item): item is NonNullable<typeof item> => Boolean(item));
 
       return reply.status(200).send({
         success: true,
-        data: bars.map((bar) => this.serializeBar(bar)),
+        data: bars.map(({ bar, role }) => ({ ...this.serializeBar(bar), role })),
       });
     } catch (error) {
       console.error("❌ Errore barController.ts:", error);

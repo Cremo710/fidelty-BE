@@ -48,6 +48,12 @@ function maskValue(value: string | undefined | null): string {
   return `${value.slice(0, 2)}***${value.slice(-2)}`;
 }
 
+function maskEmail(value: string): string {
+  const [localPart, domain] = value.split("@");
+  if (!localPart || !domain) return "***";
+  return `${localPart.slice(0, 1)}***@${domain}`;
+}
+
 function normalizeEmailProvider(value: string | undefined): "auto" | "resend" | "smtp" {
   if (value === "resend" || value === "smtp") {
     return value;
@@ -167,7 +173,7 @@ class EmailService {
           throw new Error(resendResponse.error.message || "Resend send failed");
         }
 
-        console.log(`📨 Email ${input.kind} inviata via Resend a ${input.recipientEmail} usando ${resendConfig.fromEmail}`);
+        console.log(`📨 Email ${input.kind} inviata via Resend a ${maskEmail(input.recipientEmail)} usando ${resendConfig.fromEmail}`);
         return {
           sent: true,
           recipient: input.recipientEmail,
@@ -175,8 +181,8 @@ class EmailService {
       } catch (error) {
         this.logResendConfig(`send failure while sending ${input.kind}`);
         console.error(`❌ Email ${input.kind} failed via Resend`, {
-          recipient: input.recipientEmail,
-          message: error instanceof Error ? error.message : String(error),
+          recipient: maskEmail(input.recipientEmail),
+          message: error instanceof Error ? error.message.replaceAll(input.recipientEmail, "[redacted]") : "send_failed",
         });
 
         if (!this.shouldAllowSmtpFallback()) {
@@ -209,15 +215,15 @@ class EmailService {
     } catch (error) {
       this.logEmailConfig(`send failure while sending ${input.kind}`);
       console.error(`❌ Email ${input.kind} failed`, {
-        recipient: input.recipientEmail,
+        recipient: maskEmail(input.recipientEmail),
         code: (error as any)?.code || "unknown",
         command: (error as any)?.command || "unknown",
-        message: error instanceof Error ? error.message : String(error),
+        message: error instanceof Error ? error.message.replaceAll(input.recipientEmail, "[redacted]") : "send_failed",
       });
       throw error;
     }
 
-    console.log(`📧 Email ${input.kind} inviata a ${input.recipientEmail} usando ${fromEmail}`);
+    console.log(`📧 Email ${input.kind} inviata a ${maskEmail(input.recipientEmail)} usando ${fromEmail}`);
     return {
       sent: true,
       recipient: input.recipientEmail,

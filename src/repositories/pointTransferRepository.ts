@@ -56,7 +56,14 @@ export class PointTransferRepository {
     }));
   }
 
-  async listRecentTransfersBetween(userA: string, userB: string, limit = 10): Promise<any[]> {
+  async listRecentTransfersBetween(
+    userA: string,
+    userB: string,
+    limit?: number,
+    recentOnly = false,
+  ): Promise<any[]> {
+    const limitClause = limit === undefined ? "" : "LIMIT $3";
+    const recentClause = recentOnly ? "AND pt.created_at >= NOW() - INTERVAL '24 hours'" : "";
     const result = await databaseService.getPool().query(
       `
         SELECT
@@ -73,12 +80,13 @@ export class PointTransferRepository {
         JOIN bars ON bars.id = pt.bar_id
         JOIN utenti sender ON sender.id = pt.sender_user_id
         JOIN utenti recipient ON recipient.id = pt.recipient_user_id
-        WHERE (pt.sender_user_id = $1 AND pt.recipient_user_id = $2)
-           OR (pt.sender_user_id = $2 AND pt.recipient_user_id = $1)
+        WHERE ((pt.sender_user_id = $1 AND pt.recipient_user_id = $2)
+           OR (pt.sender_user_id = $2 AND pt.recipient_user_id = $1))
+           ${recentClause}
         ORDER BY pt.created_at DESC
-        LIMIT $3
+        ${limitClause}
       `,
-      [userA, userB, limit],
+      limit === undefined ? [userA, userB] : [userA, userB, limit],
     );
 
     return result.rows.map((row) => ({

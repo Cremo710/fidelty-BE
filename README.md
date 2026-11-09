@@ -26,7 +26,7 @@ CORS is configured to allow requests from localhost origins (Expo web uses `http
 
 ## Database e migration
 
-Lo schema è definito solo nei file SQL di `src/migrations/` (`001_baseline_schema.sql`, `003_…` … `011_timestamptz.sql`).
+Lo schema è definito solo nei file SQL di `src/migrations/` (`001_baseline_schema.sql` … `014_bar_team.sql`).
 All'avvio il server esegue il runner (`src/migrations/runner.ts`), che:
 
 1. crea la tabella di registro `schema_migrations`;
@@ -44,6 +44,19 @@ Tutte le colonne temporali sono `TIMESTAMPTZ` (migration 011). L'inizio della gi
 ## OCR scontrini
 
 Prima del lancio eseguire `npm run ocr:benchmark` su un campione di scontrini reali (soglia 90% su importo, P.IVA e numero documento).
+
+## Team attività e permessi admin
+
+La migration `014_bar_team.sql` crea le membership per attività, esegue il backfill dei proprietari esistenti come Manager e aggiunge gli indici di unicità/audit. Le nuove attività ricevono la membership Manager nella stessa transazione di creazione.
+
+Il backend ricalcola il ruolo e i permessi dal database per ogni endpoint admin; i token non contengono permessi di attività. Se l'utente gestisce più attività, deve selezionare quella corretta: il dashboard invia l'ID tramite `X-Bar-Id`.
+
+- Manager e Co-Manager hanno i permessi admin completi; solo il Manager può gestire i Co-Manager.
+- Cameriere può gestire richieste di consumazione e validare riscatti.
+- Gli inviti sono via email, scadono dopo 7 giorni e si accettano autenticandosi con l'indirizzo verificato invitato. Un utente non ancora registrato deve creare/verificare l'account prima di accettare.
+- Revoche e uscite invalidano l'accesso immediatamente perché la membership è verificata dal backend a ogni richiesta. Le operazioni sul team sono registrate in `bar_team_audit`.
+
+Per l'invio degli inviti è necessario configurare il provider email come descritto nella sezione seguente.
 
 ## Email notifiche richieste bar
 

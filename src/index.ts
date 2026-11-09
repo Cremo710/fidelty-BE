@@ -23,6 +23,8 @@ import { requireSecret } from "./utils/env.js";
 import { barConfigController } from "./controllers/barConfigController.js";
 import { adminController } from "./controllers/adminController.js";
 import { geoController } from "./controllers/geoController.js";
+import { barTeamController } from "./controllers/barTeamController.js";
+import { requireBarPermission } from "./utils/barPermissionGuard.js";
 import pg from "pg";
 
 const { Client } = pg;
@@ -185,7 +187,7 @@ async function createServer(): Promise<FastifyInstance> {
   // ==================== BAR ENDPOINTS ====================
 
   // Get bar profile (protected route)
-  app.get("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.get("/api/bar/profile", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
     return barController.getBarByUser(request, reply);
   });
 
@@ -193,17 +195,25 @@ async function createServer(): Promise<FastifyInstance> {
     return barController.listOwnedBars(request, reply);
   });
 
-  app.get("/api/bar/dashboard-stats", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.get("/api/bar/access", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barTeamController.getAccess(request, reply);
+  });
+
+  app.get("/api/bar/team/invitations/received", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barTeamController.getReceivedInvitations(request, reply);
+  });
+
+  app.get("/api/bar/dashboard-stats", { onRequest: [authenticateToken, requireBarPermission("stats.view")] }, async (request, reply) => {
     return barController.getDashboardStats(request, reply);
   });
 
   // Update bar profile (protected route) - only editable fields
-  app.patch("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.patch("/api/bar/profile", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
     return barController.updateProfile(request, reply);
   });
 
   // Delete bar profile/subscription (protected route)
-  app.delete("/api/bar/profile", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.delete("/api/bar/profile", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
     return barController.deleteProfile(request, reply);
   });
 
@@ -238,29 +248,53 @@ async function createServer(): Promise<FastifyInstance> {
   // ==================== BAR CARD CONFIG ENDPOINTS ====================
 
   // Update bar card configuration (Step 2 onboarding)
-  app.patch("/api/bar/card-config", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.patch("/api/bar/card-config", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
     return barController.updateCardConfig(request, reply);
   });
 
   // ==================== OFFERS ENDPOINTS ====================
 
+  app.get("/api/bar/team", { onRequest: [authenticateToken, requireBarPermission("staff.view")] }, async (request, reply) => {
+    return barTeamController.getTeam(request, reply);
+  });
+
+  app.post("/api/bar/team/invitations", { onRequest: [authenticateToken, requireBarPermission("staff.manage")] }, async (request, reply) => {
+    return barTeamController.invite(request, reply);
+  });
+
+  app.patch("/api/bar/team/:memberId", { onRequest: [authenticateToken, requireBarPermission("staff.manage")] }, async (request, reply) => {
+    return barTeamController.updateMember(request, reply);
+  });
+
+  app.delete("/api/bar/team/:memberId", { onRequest: [authenticateToken, requireBarPermission("staff.manage")] }, async (request, reply) => {
+    return barTeamController.removeMember(request, reply);
+  });
+
+  app.post("/api/bar/team/leave", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barTeamController.leaveTeam(request, reply);
+  });
+
+  app.post("/api/bar/team/invitations/:invitationId/accept", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return barTeamController.acceptInvitation(request, reply);
+  });
+
   // Create a new offer
-  app.post("/api/bar/offers", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.post("/api/bar/offers", { onRequest: [authenticateToken, requireBarPermission("offers.edit")] }, async (request, reply) => {
     return offerController.createOffer(request, reply);
   });
 
   // List offers for the authenticated bar owner
-  app.get("/api/bar/offers", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.get("/api/bar/offers", { onRequest: [authenticateToken, requireBarPermission("offers.edit")] }, async (request, reply) => {
     return offerController.listOffers(request, reply);
   });
 
   // Update an offer
-  app.put("/api/bar/offers/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.put("/api/bar/offers/:id", { onRequest: [authenticateToken, requireBarPermission("offers.edit")] }, async (request, reply) => {
     return offerController.updateOffer(request, reply);
   });
 
   // Delete an offer
-  app.delete("/api/bar/offers/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.delete("/api/bar/offers/:id", { onRequest: [authenticateToken, requireBarPermission("offers.edit")] }, async (request, reply) => {
     return offerController.deleteOffer(request, reply);
   });
 
@@ -272,19 +306,19 @@ async function createServer(): Promise<FastifyInstance> {
     return offerRedemptionController.getStatus(request, reply);
   });
 
-  app.post("/api/offers/redeem/validate", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.post("/api/offers/redeem/validate", { onRequest: [authenticateToken, requireBarPermission("offers.validate")] }, async (request, reply) => {
     return offerRedemptionController.validateQr(request, reply);
   });
 
   // ==================== OPENING HOURS ENDPOINTS ====================
 
   // Set opening hours (upsert)
-  app.post("/api/bar/opening-hours", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.post("/api/bar/opening-hours", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
     return openingHoursController.setOpeningHours(request, reply);
   });
 
   // Get opening hours
-  app.get("/api/bar/opening-hours", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.get("/api/bar/opening-hours", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
     return openingHoursController.getOpeningHours(request, reply);
   });
 
@@ -393,31 +427,31 @@ async function createServer(): Promise<FastifyInstance> {
     return consumptionRequestController.listForRequester(request, reply);
   });
 
-  app.get("/api/consumption-requests/bar/pending", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.get("/api/consumption-requests/bar/pending", { onRequest: [authenticateToken, requireBarPermission("consumptions.manage")] }, async (request, reply) => {
     return consumptionRequestController.listPendingForBar(request, reply);
   });
 
   // Green log: auto-credited requests for the bar's dashboard
-  app.get("/api/consumption-requests/bar/credited", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.get("/api/consumption-requests/bar/credited", { onRequest: [authenticateToken, requireBarPermission("consumptions.manage")] }, async (request, reply) => {
     return consumptionRequestController.listCreditedForBar(request, reply);
   });
 
-  app.patch("/api/consumption-requests/:id", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.patch("/api/consumption-requests/:id", { onRequest: [authenticateToken, requireBarPermission("consumptions.manage")] }, async (request, reply) => {
     return consumptionRequestController.updateStatus(request, reply);
   });
 
   // Manual credit by bar owner (bar admin only)
-  app.post("/api/consumption-requests/manual-credit", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.post("/api/consumption-requests/manual-credit", { onRequest: [authenticateToken, requireBarPermission("consumptions.manage")] }, async (request, reply) => {
     return consumptionRequestController.manualCredit(request, reply);
   });
 
   // ==================== BAR CONFIG ENDPOINTS ====================
 
-  app.get("/api/bar/config", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.get("/api/bar/config", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
     return barConfigController.getConfig(request, reply);
   });
 
-  app.patch("/api/bar/config", { onRequest: [authenticateToken] }, async (request, reply) => {
+  app.patch("/api/bar/config", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
     return barConfigController.updateConfig(request, reply);
   });
 

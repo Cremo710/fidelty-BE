@@ -190,6 +190,13 @@ export class BarRepository {
       const result = await client.query(query, values);
       const barId: string = result.rows[0].id;
 
+      await client.query(
+        `INSERT INTO bar_team_members (id, bar_id, user_id, email, role, status, accepted_at)
+         SELECT $1, $2, u.id, lower(u.email), 'manager', 'active', CURRENT_TIMESTAMP
+         FROM utenti u WHERE u.id = $3`,
+        [ulid(), barId, bar.userId],
+      );
+
       await client.query("COMMIT");
       console.log(`✅ Bar creato con ID: ${barId}`);
       return barId;
@@ -734,6 +741,12 @@ export class BarRepository {
         data.cardUseCover ?? false,
       ];
     await client.query(barQuery, barValues);
+    await client.query(
+      `INSERT INTO bar_team_members (id, bar_id, user_id, email, role, status, accepted_at)
+       SELECT $1, $2, u.id, lower(u.email), 'manager', 'active', CURRENT_TIMESTAMP
+       FROM utenti u WHERE u.id = $3`,
+      [ulid(), barId, data.userId],
+    );
 
     if (data.offers && data.offers.length > 0) {
       for (const offer of data.offers) {

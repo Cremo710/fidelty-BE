@@ -286,9 +286,16 @@ class FriendsController {
         return reply.status(403).send({ success: false, error: "Scambio punti disponibile solo tra amici", code: "FRIENDSHIP_REQUIRED" });
       }
 
+      const { history } = (request.query as { history?: string } | undefined) || {};
+      const transferLimit = history === "true" || history === "24h" ? undefined : 10;
       const [sharedBars, recentTransfers, dailyTransferredPoints] = await Promise.all([
         pointTransferRepository.listSharedBarContexts(userId, target.id),
-        pointTransferRepository.listRecentTransfersBetween(userId, target.id),
+        pointTransferRepository.listRecentTransfersBetween(
+          userId,
+          target.id,
+          transferLimit,
+          history === "24h",
+        ),
         pointTransferRepository.getDailySentPoints(userId),
       ]);
 
