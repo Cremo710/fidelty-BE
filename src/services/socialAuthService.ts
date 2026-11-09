@@ -12,6 +12,7 @@ import { ulid } from "ulid";
 import { databaseService } from "./databaseService.js";
 import { getAuthService } from "./authService.js";
 import { userRepository } from "../repositories/userRepository.js";
+import { summarizeBody } from "../utils/socialAuthDiagnostics.js";
 
 export type SocialProvider = "google" | "apple";
 
@@ -349,6 +350,7 @@ async function signInWithSocialIdentityInternal(input: {
   identityToken: string;
   nonce: string;
   name?: string;
+  logInfo?: (fields: Record<string, unknown>) => void;
 }) {
   const identity = await verifyProviderToken(
     input.provider,
@@ -402,6 +404,19 @@ async function signInWithSocialIdentityInternal(input: {
       );
       const displayName =
         input.name?.trim() || identity.name || email.split("@")[0];
+      input.logInfo?.({
+        event: "social_auth_user_create_values",
+        provider: input.provider,
+        table: "utenti",
+        fields: summarizeBody({
+          id,
+          public_id: publicId,
+          name: displayName,
+          email,
+          password: passwordHash,
+          is_email_verified: true,
+        }),
+      });
       const created = await client.query<SocialUser>(
         `INSERT INTO utenti
            (id, public_id, name, email, password, is_email_verified, email_verified_at, updated_at)
@@ -471,6 +486,7 @@ export async function signInWithSocialIdentity(input: {
   identityToken: string;
   nonce: string;
   name?: string;
+  logInfo?: (fields: Record<string, unknown>) => void;
 }) {
   try {
     return await signInWithSocialIdentityInternal(input);

@@ -6,6 +6,7 @@ import {
   SocialAuthInternalError,
   type SocialProvider,
 } from "../services/socialAuthService.js";
+import { summarizeBody } from "../utils/socialAuthDiagnostics.js";
 
 export const socialAuthInputSchema = z.object({
   provider: z.enum(["google", "apple"]),
@@ -69,6 +70,14 @@ function getSocialProvider(body: unknown): SocialProvider | "unknown" {
 
 export class SocialAuthController {
   async login(request: FastifyRequest, reply: FastifyReply) {
+    // TODO: remove temporary social-auth payload diagnostics after debugging.
+    request.log.info({
+      event: "social_auth_request_received",
+      provider: getSocialProvider(request.body),
+      reqId: request.id,
+      fields: summarizeBody(request.body),
+    });
+
     const parsed = socialAuthInputSchema.safeParse(request.body);
     if (!parsed.success) {
       request.log.error({
@@ -102,6 +111,7 @@ export class SocialAuthController {
         identityToken: parsed.data.identityToken,
         nonce: parsed.data.nonce,
         name: parsed.data.name ?? undefined,
+        logInfo: (fields) => request.log.info(fields),
       });
       request.log.info({
         event: "social_auth_succeeded",
@@ -118,6 +128,10 @@ export class SocialAuthController {
         parsed.data.identityToken,
         parsed.data.nonce,
         parsed.data.name ?? "",
+        parsed.data.email ?? "",
+        ...Object.values(parsed.data.fullName ?? {}).filter(
+          (value): value is string => typeof value === "string",
+        ),
       ];
       const socialError = error instanceof SocialAuthError ? error : undefined;
       const internalError =
@@ -139,6 +153,10 @@ export class SocialAuthController {
       const errorStack =
         sourceError instanceof Error ? sourceError.stack : undefined;
       const diagnostics = socialError?.diagnostics;
+      const postgresError =
+        typeof sourceError === "object" && sourceError !== null
+          ? (sourceError as { column?: unknown; table?: unknown })
+          : undefined;
 
       request.log.error({
         event: "social_auth_failed",
@@ -155,6 +173,12 @@ export class SocialAuthController {
         diagnostics: diagnostics
           ? sanitizeLogValue(diagnostics, secrets)
           : undefined,
+        ...(typeof postgresError?.column === "string"
+          ? { column: postgresError.column }
+          : {}),
+        ...(typeof postgresError?.table === "string"
+          ? { table: postgresError.table }
+          : {}),
         ...(process.env.NODE_ENV !== "production" && errorStack
           ? { stack: sanitizeLogText(errorStack, secrets) }
           : {}),
