@@ -1,4 +1,3 @@
-import { randomInt } from "crypto";
 /**
  * Migrazione: genera un public_id (FU-XXXXX) per tutti gli utenti
  * che ancora non ne hanno uno.
@@ -16,16 +15,7 @@ config();
 
 import pkg from "pg";
 const { Client } = pkg;
-
-const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-function generateCode(): string {
-  let code = "FU-";
-  for (let i = 0; i < 5; i++) {
-    code += CHARS.charAt(randomInt(CHARS.length));
-  }
-  return code;
-}
+import { generateUniquePublicId } from "../utils/publicId.js";
 
 async function main() {
   const client = new Client({
@@ -61,25 +51,9 @@ async function main() {
 
     console.log(`📊 Utenti senza public_id: ${result.rows.length}\n`);
 
-    // Raccogli tutti i public_id esistenti per evitare collisioni
-    const existingResult = await client.query(
-      "SELECT public_id FROM utenti WHERE public_id IS NOT NULL"
-    );
-    const existingCodes = new Set(existingResult.rows.map((r: any) => r.public_id));
-
     let updated = 0;
     for (const row of result.rows) {
-      let code: string;
-      let attempts = 0;
-      do {
-        code = generateCode();
-        attempts++;
-        if (attempts > 100) {
-          throw new Error(`Impossibile generare codice unico dopo 100 tentativi per utente ${row.id}`);
-        }
-      } while (existingCodes.has(code));
-
-      existingCodes.add(code);
+      const code = await generateUniquePublicId(client);
       await client.query("UPDATE utenti SET public_id = $1 WHERE id = $2", [code, row.id]);
       updated++;
       console.log(`   ${row.id} → ${code}`);

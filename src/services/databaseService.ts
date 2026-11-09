@@ -1,7 +1,5 @@
-import { randomInt } from "crypto";
 import pkg from "pg";
 const { Pool } = pkg;
-import { ulid } from "ulid";
 
 import { runMigrations } from "../migrations/runner.js";
 import { loyaltyCardRepository } from "../repositories/loyaltyCardRepository.js";
@@ -93,28 +91,6 @@ export class DatabaseService {
    */
   getPool(): pkg.Pool {
     return this.pool;
-  }
-
-  /**
-   * Genera un public_id unico nel formato FU-XXXXX
-   */
-  private async generateUniquePublicId(client: pkg.PoolClient): Promise<string> {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    const MAX_ATTEMPTS = 10;
-
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      let code = "FU-";
-      for (let i = 0; i < 5; i++) {
-        code += chars.charAt(randomInt(chars.length));
-      }
-      const check = await client.query(
-        "SELECT 1 FROM utenti WHERE public_id = $1 LIMIT 1",
-        [code],
-      );
-      if (check.rows.length === 0) return code;
-    }
-
-    throw new Error("Impossibile generare un public_id unico dopo 10 tentativi");
   }
 }
 

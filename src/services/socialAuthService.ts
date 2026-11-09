@@ -12,7 +12,6 @@ import { ulid } from "ulid";
 import { databaseService } from "./databaseService.js";
 import { getAuthService } from "./authService.js";
 import { userRepository } from "../repositories/userRepository.js";
-import { summarizeBody } from "../utils/socialAuthDiagnostics.js";
 
 export type SocialProvider = "google" | "apple";
 
@@ -398,33 +397,29 @@ async function signInWithSocialIdentityInternal(input: {
       }
 
       const id = ulid();
-      const publicId = ulid();
       const passwordHash = await getAuthService().hashPassword(
         randomBytes(32).toString("base64url"),
       );
       const displayName =
         input.name?.trim() || identity.name || email.split("@")[0];
-      input.logInfo?.({
-        event: "social_auth_user_create_values",
-        provider: input.provider,
-        table: "utenti",
-        fields: summarizeBody({
-          id,
-          public_id: publicId,
-          name: displayName,
-          email,
-          password: passwordHash,
-          is_email_verified: true,
-        }),
+      const created = await userRepository.createUserInTransaction(client, {
+        id,
+        name: displayName,
+        email,
+        password: passwordHash,
+        emailVerified: true,
+        logInfo: input.logInfo,
       });
-      const created = await client.query<SocialUser>(
-        `INSERT INTO utenti
-           (id, public_id, name, email, password, is_email_verified, email_verified_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         RETURNING id, public_id, email, name`,
-        [id, publicId, displayName, email, passwordHash],
-      );
-      user = created.rows[0];
+      if (!created) {
+        throw new SocialAuthError(
+          "An account already exists with this email. Sign in using its existing sign-in method.",
+          "SOCIAL_ACCOUNT_LINK_REQUIRED",
+          409,
+          "user_lookup_or_create",
+          "SOCIAL_ACCOUNT_LINK_REQUIRED",
+        );
+      }
+      user = created;
 
       await client.query(
         `INSERT INTO social_identities (user_id, provider, provider_subject, email_snapshot)

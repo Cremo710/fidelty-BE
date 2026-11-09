@@ -1,6 +1,18 @@
-import { randomInt } from "crypto";
 import { databaseService } from "../services/databaseService.js";
 import { ulid } from "ulid";
+import type { PoolClient } from "pg";
+import { generateUniquePublicId, PUBLIC_ID_MAX_ATTEMPTS } from "../utils/publicId.js";
+import { summarizeBody } from "../utils/socialAuthDiagnostics.js";
+
+function isPublicIdCollision(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { code?: unknown; constraint?: unknown };
+  return (
+    candidate.code === "23505" &&
+    typeof candidate.constraint === "string" &&
+    candidate.constraint.includes("public_id")
+  );
+}
 
 export interface UserDTO {
   id: string;
@@ -60,25 +72,18 @@ export class UserRepository {
       await client.query("BEGIN");
 
       const id = ulid();
-      const publicId = await this.generateUniquePublicId(client);
-      const query = `
-        INSERT INTO utenti (id, public_id, name, email, password, is_email_verified, email_verified_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, false, NULL, CURRENT_TIMESTAMP)
-        ON CONFLICT (email) DO NOTHING
-        RETURNING id
-      `;
-
-      const values = [id, publicId, user.name, user.email, user.password];
-      const result = await client.query(query, values);
-      if (result.rows.length === 0) {
+      const created = await this.createUserInTransaction(client, {
+        ...user,
+        id,
+      });
+      if (!created) {
         await client.query("ROLLBACK");
         throw new EmailExistsError();
       }
-      const userId: string = result.rows[0].id;
 
       await client.query("COMMIT");
-      console.log(`✅ Utente creato con ID: ${userId}`);
-      return userId;
+      console.log(`✅ Utente creato con ID: ${created.id}`);
+      return created.id;
     } catch (error) {
       if (!(error instanceof EmailExistsError)) {
         await client.query("ROLLBACK").catch(() => undefined);
@@ -88,6 +93,70 @@ export class UserRepository {
     } finally {
       client.release();
     }
+  }
+
+  async createUserInTransaction(
+    client: PoolClient,
+    user: {
+      id: string;
+      name: string;
+      email: string;
+      password: string;
+      emailVerified?: boolean;
+      logInfo?: (fields: Record<string, unknown>) => void;
+    },
+  ): Promise<{ id: string; public_id: string; name: string; email: string } | null> {
+    for (let attempt = 0; attempt < PUBLIC_ID_MAX_ATTEMPTS; attempt++) {
+      const publicId = await generateUniquePublicId(client);
+      user.logInfo?.({
+        event: "social_auth_user_create_values",
+        table: "utenti",
+        fields: summarizeBody({
+          id: user.id,
+          public_id: publicId,
+          name: user.name,
+          email: user.email,
+          password: user.password,
+          is_email_verified: user.emailVerified ?? false,
+        }),
+      });
+      await client.query("SAVEPOINT create_user_public_id");
+
+      try {
+        const result = await client.query<{
+          id: string;
+          public_id: string;
+          name: string;
+          email: string;
+        }>(
+          `INSERT INTO utenti
+             (id, public_id, name, email, password, is_email_verified, email_verified_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+           ON CONFLICT (email) DO NOTHING
+           RETURNING id, public_id, name, email`,
+          [
+            user.id,
+            publicId,
+            user.name,
+            user.email,
+            user.password,
+            user.emailVerified ?? false,
+            user.emailVerified ? new Date() : null,
+          ],
+        );
+        await client.query("RELEASE SAVEPOINT create_user_public_id");
+        return result.rows[0] ?? null;
+      } catch (error) {
+        await client.query("ROLLBACK TO SAVEPOINT create_user_public_id");
+        await client.query("RELEASE SAVEPOINT create_user_public_id");
+        if (isPublicIdCollision(error)) continue;
+        throw error;
+      }
+    }
+
+    throw new Error(
+      `Impossibile creare un utente con public_id unico dopo ${PUBLIC_ID_MAX_ATTEMPTS} tentativi`,
+    );
   }
 
   /**
@@ -567,29 +636,6 @@ export class UserRepository {
     }
 
   /**
-   * Genera un public_id unico nel formato FU-XXXXX (5 caratteri alfanumerici)
-   * Ritenta fino a 10 volte in caso di collisione.
-   */
-  private async generateUniquePublicId(client: any): Promise<string> {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    const MAX_ATTEMPTS = 10;
-
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      let code = "FU-";
-      for (let i = 0; i < 5; i++) {
-        code += chars.charAt(randomInt(chars.length));
-      }
-      const check = await client.query(
-        "SELECT 1 FROM utenti WHERE public_id = $1 LIMIT 1",
-        [code],
-      );
-      if (check.rows.length === 0) return code;
-    }
-
-    throw new Error("Impossibile generare un public_id unico dopo 10 tentativi");
-  }
-
-  /**
    * Backfill: genera public_id per tutti gli utenti che non ne hanno uno.
    * Idempotente e sicuro da eseguire ad ogni avvio del server.
    */
@@ -610,7 +656,7 @@ export class UserRepository {
 
       let updated = 0;
       for (const row of result.rows) {
-        const publicId = await this.generateUniquePublicId(client);
+        const publicId = await generateUniquePublicId(client);
         await client.query(
           "UPDATE utenti SET public_id = $1 WHERE id = $2",
           [publicId, row.id]
