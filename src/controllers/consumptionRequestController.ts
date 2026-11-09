@@ -445,6 +445,25 @@ export class ConsumptionRequestController {
 
       // ── OCR ────────────────────────────────────────────────────────────────
       const ocrResult = await extractReceiptFields(imageBuffer);
+      const fieldsFound = {
+        amount:    ocrResult.amount.value !== null,
+        vatNumber: ocrResult.vatNumber.value !== null,
+        docId:     ocrResult.docId.value !== null,
+        date:      ocrResult.date.value !== null,
+      };
+      const mappedOcrData = {
+        amount:    ocrResult.amount.value,
+        docId:     ocrResult.docId.value,
+        date:      ocrResult.date.value,
+        vatNumber: ocrResult.vatNumber.value,
+        fieldsFound,
+        durationMs: ocrResult.durationMs,
+      };
+      request.log.info({
+        event: "receipt_ocr_result",
+        ocrResult,
+        mapped: mappedOcrData,
+      });
 
       // ── Gate P.IVA: blocca prima di qualsiasi persistenza/accredito ─────────
       const extractedVatNumber = ocrResult.vatNumber.value;
@@ -470,12 +489,6 @@ export class ConsumptionRequestController {
       // ── Persisti sessione OCR ──────────────────────────────────────────────
       const { ulid } = await import("ulid");
       const sessionId = ulid();
-      const fieldsFound = {
-        amount:    ocrResult.amount.value !== null,
-        vatNumber: ocrResult.vatNumber.value !== null,
-        docId:     ocrResult.docId.value !== null,
-        date:      ocrResult.date.value !== null,
-      };
 
       await pool.query(
         `INSERT INTO receipt_ocr_sessions (
@@ -502,12 +515,7 @@ export class ConsumptionRequestController {
         data: {
           ocrSessionId: sessionId,
           // Campi estratti (solo per visualizzazione — il server li userà dal DB al Passo 2)
-          amount:    ocrResult.amount.value,
-          docId:     ocrResult.docId.value,
-          date:      ocrResult.date.value,
-          vatNumber: ocrResult.vatNumber.value,
-          fieldsFound,
-          durationMs: ocrResult.durationMs,
+          ...mappedOcrData,
         },
       });
     } catch (error) {
