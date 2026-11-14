@@ -1,6 +1,7 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { emailService } from "../services/emailService.js";
 import { barTeamService } from "../services/barTeamService.js";
+import { barTeamNotificationService } from "../services/barTeamNotificationService.js";
 
 function sendServiceError(reply: FastifyReply, result: { status: number; code: string }) {
   const messages: Record<string, string> = {
@@ -99,6 +100,13 @@ export class BarTeamController {
         code: "INVITATION_EMAIL_SEND_FAILED",
       });
     }
+    await barTeamNotificationService.notifyInvite({
+      recipientEmail: result.email,
+      invitationId: result.invitation.id,
+      barId: request.selectedBarId!,
+      barName: result.invitation.barName,
+      inviterName: result.invitation.inviterName,
+    });
     return reply.status(201).send({
       success: true,
       data: { id: result.invitation.id, emailSent: delivery.sent },

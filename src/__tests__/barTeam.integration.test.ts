@@ -7,6 +7,7 @@ const testUrl = process.env.TEST_DATABASE_URL;
 describe.skipIf(!testUrl)("integrazione team bar (database di test)", () => {
   let databaseService: typeof import("../services/databaseService.js").databaseService;
   let barTeamService: typeof import("../services/barTeamService.js").barTeamService;
+  let loyaltyCardRepository: typeof import("../repositories/loyaltyCardRepository.js").loyaltyCardRepository;
   let requireBarPermission: typeof import("../utils/barPermissionGuard.js").requireBarPermission;
   const userIds: string[] = [];
   const barIds: string[] = [];
@@ -52,6 +53,7 @@ describe.skipIf(!testUrl)("integrazione team bar (database di test)", () => {
     process.env.DATABASE_URL = testUrl;
     ({ databaseService } = await import("../services/databaseService.js"));
     ({ barTeamService } = await import("../services/barTeamService.js"));
+    ({ loyaltyCardRepository } = await import("../repositories/loyaltyCardRepository.js"));
     ({ requireBarPermission } = await import("../utils/barPermissionGuard.js"));
     await databaseService.initializeTables();
     const manager = await createUser();
@@ -77,6 +79,28 @@ describe.skipIf(!testUrl)("integrazione team bar (database di test)", () => {
   });
 
   it("enforces role access, invitations, protections, duplicates, expiry, revocation and race safety", async () => {
+    const unlockedCards = await Promise.all([
+      loyaltyCardRepository.ensureCardExists(managerId, barId),
+      loyaltyCardRepository.ensureCardExists(managerId, barId),
+    ]);
+    expect(unlockedCards.filter(({ created }) => created)).toHaveLength(1);
+    expect(new Set(unlockedCards.map(({ id }) => id)).size).toBe(1);
+    const unlockedCard = await loyaltyCardRepository.findByUserAndBar(managerId, barId);
+    expect(unlockedCard).toMatchObject({ points: 0, receipts_count: 0, lifetime_points: 0 });
+    await databaseService.getPool().query(
+      "UPDATE loyalty_cards SET points = 45, lifetime_points = 45, receipts_count = 2 WHERE user_id = $1 AND bar_id = $2",
+      [managerId, barId],
+    );
+    expect(await loyaltyCardRepository.ensureCardExists(managerId, barId)).toMatchObject({
+      id: unlockedCard?.id,
+      created: false,
+    });
+    expect(await loyaltyCardRepository.findByUserAndBar(managerId, barId)).toMatchObject({
+      points: 45,
+      receipts_count: 2,
+      lifetime_points: 45,
+    });
+
     const permissionGuard = async (userId: string, selectedBarId: string, permission: Parameters<typeof requireBarPermission>[0]) => {
       let statusCode = 200;
       const reply = {
@@ -97,6 +121,14 @@ describe.skipIf(!testUrl)("integrazione team bar (database di test)", () => {
     });
     expect(invitation.status).toBe(201);
     if (invitation.status !== 201) return;
+    const receivedInvitations = await barTeamService.listReceivedInvitations(waiterEmail);
+    expect(receivedInvitations).toContainEqual(expect.objectContaining({
+      id: invitation.invitation.id,
+      barId,
+      barName: "Test bar",
+      invitedByName: "Team test",
+    }));
+    expect(receivedInvitations.find(({ id }) => id === invitation.invitation.id)).toHaveProperty("createdAt");
     expect((await barTeamService.createInvitation({
       barId, actorUserId: managerId, actorRole: "manager", email: waiterEmail, role: "waiter",
     })).code).toBe("TEAM_MEMBER_EXISTS");

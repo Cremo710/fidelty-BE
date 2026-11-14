@@ -53,6 +53,26 @@ export class LoyaltyCardRepository {
     }
   }
 
+  async ensureCardExists(userId: string, barId: string): Promise<{ id: number; created: boolean }> {
+    const inserted = await databaseService.getPool().query<{ id: number }>(
+      `INSERT INTO loyalty_cards (user_id, bar_id, points, lifetime_points, receipts_count)
+       VALUES ($1, $2, 0, 0, 0)
+       ON CONFLICT (user_id, bar_id) DO NOTHING
+       RETURNING id`,
+      [userId, barId],
+    );
+
+    if (inserted.rows[0]) {
+      return { id: inserted.rows[0].id, created: true };
+    }
+
+    const existing = await this.findByUserAndBar(userId, barId);
+    if (!existing) {
+      throw new Error("LOYALTY_CARD_CREATE_FAILED");
+    }
+    return { id: existing.id, created: false };
+  }
+
   /**
    * Upsert di una carta fedeltà all'interno di una transazione esistente.
    *

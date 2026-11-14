@@ -491,6 +491,10 @@ async function createServer(): Promise<FastifyInstance> {
     return loyaltyCardController.listMine(request, reply);
   });
 
+  app.post("/api/loyalty-cards/:barId/unlock", { onRequest: [authenticateToken] }, async (request, reply) => {
+    return loyaltyCardController.unlockForUser(request, reply);
+  });
+
   // Graceful shutdown
   process.on("SIGTERM", async () => {
     app.log.info("SIGTERM signal received: closing HTTP server");

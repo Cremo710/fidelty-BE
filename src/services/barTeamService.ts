@@ -79,8 +79,11 @@ export class BarTeamService {
     );
     const result = await databaseService.getPool().query(
       `SELECT tm.id, tm.bar_id AS "barId", tm.email, tm.role,
-         tm.expires_at AS "expiresAt", b.name AS "barName"
-       FROM bar_team_members tm JOIN bars b ON b.id = tm.bar_id
+         tm.created_at AS "createdAt", tm.expires_at AS "expiresAt",
+         b.name AS "barName", inviter.name AS "invitedByName"
+       FROM bar_team_members tm
+       JOIN bars b ON b.id = tm.bar_id
+       LEFT JOIN utenti inviter ON inviter.id = tm.invited_by_user_id
        WHERE lower(tm.email) = $1 AND tm.status = 'pending' AND tm.expires_at > CURRENT_TIMESTAMP
        ORDER BY tm.created_at DESC`,
       [normalizedEmail],
@@ -107,7 +110,7 @@ export class BarTeamService {
     }
 
     const client = await databaseService.getPool().connect();
-    let invitation: { id: string; barName: string };
+    let invitation: { id: string; barName: string; inviterName: string };
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`bar-team:${input.barId}`]);
@@ -127,7 +130,12 @@ export class BarTeamService {
         return { status: 409 as const, code: "TEAM_MEMBER_EXISTS" };
       }
 
-      const barResult = await client.query<{ name: string }>("SELECT name FROM bars WHERE id = $1", [input.barId]);
+      const barResult = await client.query<{ name: string; inviter_name: string }>(
+        `SELECT b.name, u.name AS inviter_name
+         FROM bars b JOIN utenti u ON u.id = $2
+         WHERE b.id = $1`,
+        [input.barId, input.actorUserId],
+      );
       if (!barResult.rows[0]) {
         await client.query("ROLLBACK");
         return { status: 404 as const, code: "BAR_NOT_FOUND" };
@@ -145,7 +153,11 @@ export class BarTeamService {
         [ulid(), input.barId, input.actorUserId, email, input.role],
       );
       await client.query("COMMIT");
-      invitation = { id, barName: barResult.rows[0].name };
+      invitation = {
+        id,
+        barName: barResult.rows[0].name,
+        inviterName: barResult.rows[0].inviter_name,
+      };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
