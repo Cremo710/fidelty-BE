@@ -3,6 +3,7 @@ import { databaseService } from "../services/databaseService.js";
 import { loyaltyCardRepository } from "./loyaltyCardRepository.js";
 import type { SignalFlag } from "../services/semaphoreService.js";
 import { platformConfigRepository } from "./platformConfigRepository.js";
+import { splitPointsEqually } from "../utils/pointsAllocation.js";
 
 const MAX_CORRECTED_AMOUNT_RATIO = 2;
 
@@ -120,7 +121,34 @@ export class ConsumptionRequestRepository {
       [requestId],
     );
 
-    await loyaltyCardRepository.upsertCardInTransaction(client, userId, barId, pointsToCredit);
+    const participants = await client.query<{ user_id: string }>(
+      `SELECT user_id
+       FROM consumption_request_participants
+       WHERE request_id = $1
+       ORDER BY participant_order
+       FOR UPDATE`,
+      [requestId],
+    );
+    const participantIds = participants.rows.length > 0
+      ? participants.rows.map((participant) => participant.user_id)
+      : [userId];
+    const allocations = splitPointsEqually(pointsToCredit, participantIds);
+
+    for (const [participantOrder, allocation] of allocations.entries()) {
+      await client.query(
+        `INSERT INTO consumption_request_participants (request_id, user_id, participant_order, points_allocated)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (request_id, user_id)
+         DO UPDATE SET points_allocated = EXCLUDED.points_allocated`,
+        [requestId, allocation.userId, participantOrder, allocation.pointsAllocated],
+      );
+      await loyaltyCardRepository.upsertCardInTransaction(
+        client,
+        allocation.userId,
+        barId,
+        allocation.pointsAllocated,
+      );
+    }
 
     return updatedResult.rows[0];
   }
@@ -152,14 +180,26 @@ export class ConsumptionRequestRepository {
     const row = updated.rows[0];
     if (!row) return;
 
-    await client.query(
-      `UPDATE loyalty_cards
-       SET points          = GREATEST(points - $3, 0),
-           lifetime_points = GREATEST(lifetime_points - $3, 0),
-           updated_at      = CURRENT_TIMESTAMP
-       WHERE user_id = $1 AND bar_id = $2`,
-      [row.requester_user_id, row.bar_id, Number(row.points_preview) || 0],
+    const participants = await client.query<{ user_id: string; points_allocated: number }>(
+      `SELECT user_id, points_allocated
+       FROM consumption_request_participants
+       WHERE request_id = $1`,
+      [requestId],
     );
+    const allocations = participants.rows.length > 0
+      ? participants.rows
+      : [{ user_id: row.requester_user_id, points_allocated: Number(row.points_preview) || 0 }];
+
+    for (const allocation of allocations) {
+      await client.query(
+        `UPDATE loyalty_cards
+         SET points          = GREATEST(points - $3, 0),
+             lifetime_points = GREATEST(lifetime_points - $3, 0),
+             updated_at      = CURRENT_TIMESTAMP
+         WHERE user_id = $1 AND bar_id = $2`,
+        [allocation.user_id, row.bar_id, Number(allocation.points_allocated) || 0],
+      );
+    }
   }
 
   async listPendingByBarId(barId: string): Promise<ConsumptionRequestDTO[]> {
@@ -193,6 +233,7 @@ export class ConsumptionRequestRepository {
     const query = `
       SELECT
         cr.*,
+        COALESCE(participant.points_allocated, cr.points_preview) AS points_preview,
         b.name AS bar_name,
         b.merchant_name AS bar_business_name,
         b.address AS bar_address,
@@ -200,7 +241,9 @@ export class ConsumptionRequestRepository {
         b.iva AS bar_piva
       FROM consumption_requests cr
       LEFT JOIN bars b ON b.id = cr.bar_id
-      WHERE cr.requester_user_id = $1
+      LEFT JOIN consumption_request_participants participant
+        ON participant.request_id = cr.id AND participant.user_id = $1
+      WHERE cr.requester_user_id = $1 OR participant.user_id = $1
       ORDER BY cr.created_at DESC
     `;
 
@@ -252,6 +295,35 @@ export class ConsumptionRequestRepository {
         throw new Error("CORRECTED_AMOUNT_TOO_HIGH");
       }
       const pointsEarned = Math.round(finalAmount * platformConfig.pointsPerEuro);
+      const participantResult = await client.query<{ user_id: string }>(
+        `SELECT user_id
+         FROM consumption_request_participants
+         WHERE request_id = $1
+         ORDER BY participant_order
+         FOR UPDATE`,
+        [input.requestId],
+      );
+      const participantIds = participantResult.rows.length > 0
+        ? participantResult.rows.map((participant) => participant.user_id)
+        : [existing.requester_user_id];
+      const allocations = splitPointsEqually(pointsEarned, participantIds);
+
+      for (const [participantOrder, allocation] of allocations.entries()) {
+        await client.query(
+          `INSERT INTO consumption_request_participants (request_id, user_id, participant_order, points_allocated)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (request_id, user_id)
+           DO UPDATE SET points_allocated = EXCLUDED.points_allocated`,
+          [input.requestId, allocation.userId, participantOrder, allocation.pointsAllocated],
+        );
+        await loyaltyCardRepository.upsertCardInTransaction(
+          client,
+          allocation.userId,
+          existing.bar_id,
+          allocation.pointsAllocated,
+        );
+      }
+
       const amountCorrected = Math.abs(finalAmount - originalAmount) > 0.004;
       const correctionFlag: SignalFlag[] = amountCorrected
         ? [{
@@ -260,13 +332,6 @@ export class ConsumptionRequestRepository {
             reason: `Importo corretto dal barista da ${originalAmount.toFixed(2)} € a ${finalAmount.toFixed(2)} €.`,
           }]
         : [];
-
-      await loyaltyCardRepository.upsertCardInTransaction(
-        client,
-        existing.requester_user_id,
-        existing.bar_id,
-        pointsEarned,
-      );
 
       const updatedResult = await client.query<ConsumptionRequestDTO>(
         `

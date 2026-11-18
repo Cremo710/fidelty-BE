@@ -27,6 +27,8 @@ Genera ogni segreto con: `node -e "console.log(require('crypto').randomBytes(48)
 
 - [ ] Piano Render: sul piano gratuito il server si sospende dopo 15 minuti e la prima richiesta impiega fino a un minuto
 - [ ] Migration applicate in ordine e registrate (avviene all'avvio: controllare i log)
+- Le tabelle storiche `point_transfers` e `point_transfer_events` restano nel database per conservare i record esistenti;
+  pianificare un export/periodo di conservazione prima di rimuoverle.
 - [ ] `npm run ocr:benchmark` superato su scontrini reali (soglia 90%)
 - [ ] Nessun `.env` o chiave nel repository e nella cronologia Git
 
@@ -36,7 +38,7 @@ Genera ogni segreto con: `node -e "console.log(require('crypto').randomBytes(48)
 - I test di integrazione (`src/__tests__/*.integration.test.ts`) partono solo se è impostata `TEST_DATABASE_URL`
   verso un database dedicato (es. branch Neon `test`; l'URL deve contenere "test"). Le migration vengono applicate automaticamente.
 - Ancora da coprire con test di integrazione: approvazione richieste bar, richiesta di consumo end-to-end,
-  trasferimento punti, riscatto offerte.
+  riscatto offerte.
 
 ## Documentazione archiviata
 

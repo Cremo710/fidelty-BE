@@ -187,6 +187,7 @@
         ON friendship_requests(pair_low_user_id, pair_high_user_id)
         WHERE status = 'pending';
 
+      -- Legacy transfer tables are retained for historical records; runtime endpoints no longer use them.
       CREATE TABLE IF NOT EXISTS point_transfers (
         id VARCHAR(26) PRIMARY KEY,
         sender_user_id VARCHAR(26) NOT NULL REFERENCES utenti(id) ON DELETE CASCADE,

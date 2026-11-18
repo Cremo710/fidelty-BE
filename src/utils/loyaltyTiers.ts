@@ -11,7 +11,7 @@ export const MAX_TIER_INDEX = LOYALTY_TIERS.length - 1;
 /**
  * Restituisce l'indice del tier più alto la cui minPoints è <= points.
  * Usa i punti guadagnati in totale (lifetime_points), non il saldo,
- * perché il livello è un traguardo storico che non scende con riscatti e trasferimenti.
+ * perché il livello è un traguardo storico che non scende con i riscatti.
  */
 export function getTierIndexFromPoints(points: number): number {
   let index = 0;

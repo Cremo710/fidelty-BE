@@ -14,6 +14,7 @@ import { databaseService } from "../services/databaseService.js";
 import { extractDocId, extractReceiptFields } from "../services/visionOcrService.js";
 import { isValidItalianVatNumber, validateReceiptOcr } from "../services/receiptValidation.js";
 import { deleteCloudinaryImageByUrl, getSignedCloudinaryUrl, uploadReceiptImage } from "../utils/imageUpload.js";
+import { splitPointsEqually } from "../utils/pointsAllocation.js";
 
 const RECEIPT_IMAGE_RETENTION_DAYS = Number(process.env.RECEIPT_IMAGE_RETENTION_DAYS || 90);
 
@@ -597,7 +598,29 @@ export class ConsumptionRequestController {
         userLongitude?: number | string;
         ocrSessionId?: string;
         isMockedLocation?: boolean | string;
+        participantPublicIds?: unknown;
       } | undefined) || {};
+
+      if (body.participantPublicIds !== undefined && !Array.isArray(body.participantPublicIds)) {
+        return reply.status(400).send({
+          success: false,
+          error: "Elenco partecipanti non valido",
+          code: "INVALID_RECEIPT_PARTICIPANTS",
+        });
+      }
+      const participantPublicIds = (Array.isArray(body.participantPublicIds) ? body.participantPublicIds : [])
+        .map((publicId) => typeof publicId === "string" ? publicId.trim().toUpperCase() : "");
+      if (
+        participantPublicIds.length > 9
+        || participantPublicIds.some((publicId) => !publicId)
+        || new Set(participantPublicIds).size !== participantPublicIds.length
+      ) {
+        return reply.status(400).send({
+          success: false,
+          error: "Seleziona al massimo 9 amici distinti",
+          code: "INVALID_RECEIPT_PARTICIPANTS",
+        });
+      }
 
       if (!body.ocrSessionId) {
         return reply.status(400).send({
@@ -738,11 +761,38 @@ export class ConsumptionRequestController {
       const client = await databaseService.getPool().connect();
       let clientReleased = false;
       const releaseClient = () => { if (!clientReleased) { clientReleased = true; client.release(); } };
+      let participantUserIds = [userId];
       let evaluation: Awaited<ReturnType<typeof semaphoreService.evaluate>>;
       try {
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption:${userId}:${bar.id}`]);
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption-bar:${bar.id}`]);
+        if (participantPublicIds.length > 0) {
+          const friendsResult = await client.query<{ id: string; public_id: string }>(
+            `SELECT u.id, u.public_id
+             FROM utenti u
+             WHERE u.public_id = ANY($2::varchar[])
+               AND u.id <> $1
+               AND EXISTS (
+                 SELECT 1
+                 FROM friendships f
+                 WHERE (f.user_id = $1 AND f.friend_id = u.id)
+                    OR (f.friend_id = $1 AND f.user_id = u.id)
+               )
+             ORDER BY array_position($2::varchar[], u.public_id)`,
+            [userId, participantPublicIds],
+          );
+          if (friendsResult.rows.length !== participantPublicIds.length) {
+            await client.query("ROLLBACK");
+            releaseClient();
+            return reply.status(403).send({
+              success: false,
+              error: "Tutti i partecipanti devono essere amici accettati",
+              code: "RECEIPT_PARTICIPANTS_MUST_BE_FRIENDS",
+            });
+          }
+          participantUserIds = [userId, ...friendsResult.rows.map((friend) => friend.id)];
+        }
         evaluation = await semaphoreService.evaluate({
           userId,
           barId: bar.id,
@@ -786,6 +836,7 @@ export class ConsumptionRequestController {
         ? (evaluation.signals.find((s) => s.severity === "reject")?.reason ?? "Rifiutato automaticamente.")
         : null;
       const pointsPreview = Math.round(amount * platformConfig.pointsPerEuro);
+      const participantAllocations = splitPointsEqually(pointsPreview, participantUserIds);
 
       // ── Persist request (+ optional auto-credit) nella stessa transazione ─────
       let created: ConsumptionRequestDTO;
@@ -837,10 +888,25 @@ export class ConsumptionRequestController {
         );
         created = insertResult.rows[0];
 
+        for (const [participantOrder, allocation] of participantAllocations.entries()) {
+          await client.query(
+            `INSERT INTO consumption_request_participants (
+               request_id, user_id, participant_order, points_allocated
+             ) VALUES ($1, $2, $3, $4)`,
+            [created.id, allocation.userId, participantOrder, allocation.pointsAllocated],
+          );
+        }
+
         if (isAutoCredit) {
-          // Credit points immediately via loyaltyCard upsert
-          await (await import("../repositories/loyaltyCardRepository.js"))
-            .loyaltyCardRepository.upsertCardInTransaction(client, userId, bar.id, pointsPreview);
+          const { loyaltyCardRepository } = await import("../repositories/loyaltyCardRepository.js");
+          for (const allocation of participantAllocations) {
+            await loyaltyCardRepository.upsertCardInTransaction(
+              client,
+              allocation.userId,
+              bar.id,
+              allocation.pointsAllocated,
+            );
+          }
 
           // Retroactive duplicate flagging (feature flag v1.1)
           if (
@@ -936,6 +1002,8 @@ export class ConsumptionRequestController {
           signalFlags: Array.isArray(created.signal_flags) ? created.signal_flags : [],
           amount,
           pointsPreview,
+          pointsForRequester: participantAllocations[0].pointsAllocated,
+          participantCount: participantAllocations.length,
           receiptCode: receiptCodeBlock1 && receiptCodeBlock2 ? `${receiptCodeBlock1}-${receiptCodeBlock2}` : null,
           ocrSessionId: ocrSession?.id ?? null,
           imageUrl: ocrSession ? getSignedCloudinaryUrl(ocrSession.image_url ?? null) : null,

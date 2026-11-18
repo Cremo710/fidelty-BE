@@ -136,4 +136,4 @@ describe.skipIf(!testUrl)("integrazione (database di test)", () => {
 });
 
 // TODO integrazione: approvazione richieste bar, richiesta di consumo end-to-end,
-// trasferimento punti e riscatto offerte (richiedono fixture di bar, tessere e offerte).
+// riscatto offerte (richiedono fixture di bar, tessere e offerte).

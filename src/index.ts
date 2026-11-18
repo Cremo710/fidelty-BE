@@ -356,14 +356,6 @@ async function createServer(): Promise<FastifyInstance> {
     return friendsController.getFriendProfile(request, reply);
   });
 
-  app.get("/api/friends/:publicId/transfer-context", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return friendsController.getTransferContext(request, reply);
-  });
-
-  app.post("/api/friends/:publicId/transfer-points", { onRequest: [authenticateToken] }, async (request, reply) => {
-    return friendsController.transferPoints(request, reply);
-  });
-
   // Remove a friend
   app.delete("/api/friends/:publicId", { onRequest: [authenticateToken] }, async (request, reply) => {
     return friendsController.removeFriend(request, reply);
