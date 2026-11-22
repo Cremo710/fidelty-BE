@@ -4,16 +4,21 @@ export type BarPermission =
   | "consumptions.manage"
   | "offers.edit"
   | "business.edit"
+  | "business.delete"
+  | "fraud.config"
   | "stats.view"
   | "staff.view"
   | "staff.manage";
 
 export const BAR_ROLE_PERMISSIONS: Record<BarTeamRole, readonly BarPermission[]> = {
+  // Solo il manager (titolare) può eliminare l'attività e modificare le regole antifrode
   manager: [
     "offers.validate",
     "consumptions.manage",
     "offers.edit",
     "business.edit",
+    "business.delete",
+    "fraud.config",
     "stats.view",
     "staff.view",
     "staff.manage",

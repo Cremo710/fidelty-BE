@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import { databaseService } from "./databaseService.js";
-import { hasBarPermission, type BarPermission, type BarTeamRole } from "../utils/barPermissions.js";
+import { BAR_ROLE_PERMISSIONS, hasBarPermission, type BarPermission, type BarTeamRole } from "../utils/barPermissions.js";
 import { canInviteRole, getTeamMutationDenial } from "../utils/barTeamPolicy.js";
 
 const INVITATION_TTL_DAYS = 7;
@@ -33,15 +33,8 @@ export class BarTeamService {
       : bars.length === 1 ? bars[0] : undefined;
     if (!bar) return null;
 
-    const allPermissions: BarPermission[] = [
-      "offers.validate",
-      "consumptions.manage",
-      "offers.edit",
-      "business.edit",
-      "stats.view",
-      "staff.view",
-      "staff.manage",
-    ];
+    // Il manager ha l'insieme completo: un nuovo permesso non va più aggiunto anche qui
+    const allPermissions: readonly BarPermission[] = BAR_ROLE_PERMISSIONS.manager;
     return {
       barId: bar.id,
       barName: bar.name,

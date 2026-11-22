@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import { config } from "dotenv";
 import multipart from "@fastify/multipart";
@@ -43,7 +43,8 @@ type ServerConfig = {
 const CONFIG: ServerConfig = {
   port: Number(process.env.PORT || 4000),
   host: process.env.HOST || "0.0.0.0",
-  nodeEnv: (process.env.NODE_ENV as ServerConfig["nodeEnv"]) || "development",
+  // Default sicuro: senza NODE_ENV si assume produzione (lo script dev imposta già "development")
+  nodeEnv: (process.env.NODE_ENV as ServerConfig["nodeEnv"]) || "production",
 };
 
 function getAllowedCorsOrigins(): RegExp[] {
@@ -116,6 +117,18 @@ async function createServer(): Promise<FastifyInstance> {
 
   const strictLimit = (max: number) => ({ config: { rateLimit: { max, timeWindow: "15 minutes" } } });
 
+  // Chiavi di rate limit che non si aggirano cambiando X-Forwarded-For:
+  // l'email del body (rotte di login/verifica/reset) o l'utente autenticato.
+  const emailRateKey = (request: FastifyRequest) => {
+    const email = (request.body as { email?: unknown } | undefined)?.email;
+    return typeof email === "string" && email.trim() ? `email:${email.trim().toLowerCase()}` : `ip:${request.ip}`;
+  };
+  const userRateKey = (request: FastifyRequest) => (request.userId ? `user:${request.userId}` : `ip:${request.ip}`);
+  // preHandler: il body è già letto, quindi l'email è disponibile
+  const strictLimitByEmail = (max: number) => ({
+    config: { rateLimit: { max, timeWindow: "15 minutes", hook: "preHandler" as const, keyGenerator: emailRateKey } },
+  });
+
   // Root endpoint
   app.get("/", async () => ({
     message: "Benvenuto nel server di Loyalty Bar",
@@ -134,7 +147,7 @@ async function createServer(): Promise<FastifyInstance> {
   });
 
   // User login endpoint
-  app.post("/api/auth/login", strictLimit(5), async (request, reply) => {
+  app.post("/api/auth/login", strictLimitByEmail(5), async (request, reply) => {
     return authController.login(request, reply);
   });
 
@@ -142,15 +155,15 @@ async function createServer(): Promise<FastifyInstance> {
     return socialAuthController.login(request, reply);
   });
 
-  app.post("/api/auth/verify-email/resend", strictLimit(5), async (request, reply) => {
+  app.post("/api/auth/verify-email/resend", strictLimitByEmail(5), async (request, reply) => {
     return authController.resendEmailVerification(request, reply);
   });
 
-  app.post("/api/auth/verify-email/confirm", strictLimit(10), async (request, reply) => {
+  app.post("/api/auth/verify-email/confirm", strictLimitByEmail(10), async (request, reply) => {
     return authController.verifyEmail(request, reply);
   });
 
-  app.post("/api/auth/password-reset/request", strictLimit(5), async (request, reply) => {
+  app.post("/api/auth/password-reset/request", strictLimitByEmail(5), async (request, reply) => {
     return authController.requestPasswordReset(request, reply);
   });
 
@@ -186,7 +199,7 @@ async function createServer(): Promise<FastifyInstance> {
   // ==================== USER SEARCH ENDPOINTS ====================
 
   // Search user by public_id (protected route)
-  app.get("/api/users/search", { onRequest: [authenticateToken], config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
+  app.get("/api/users/search", { onRequest: [authenticateToken], config: { rateLimit: { max: 30, timeWindow: "1 minute", keyGenerator: userRateKey } } }, async (request, reply) => {
     return authController.searchByPublicId(request, reply);
   });
 
@@ -219,7 +232,7 @@ async function createServer(): Promise<FastifyInstance> {
   });
 
   // Delete bar profile/subscription (protected route)
-  app.delete("/api/bar/profile", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
+  app.delete("/api/bar/profile", { onRequest: [authenticateToken, requireBarPermission("business.delete")] }, async (request, reply) => {
     return barController.deleteProfile(request, reply);
   });
 
@@ -409,6 +422,8 @@ async function createServer(): Promise<FastifyInstance> {
         },
         authenticateToken,
       ],
+      // Ogni chiamata costa Google Vision + Cloudinary: limite per utente
+      config: { rateLimit: { max: 20, timeWindow: "15 minutes", keyGenerator: userRateKey } },
       onResponse: async (request, reply) => {
         request.log.info({
           event: "receipt_ocr_response",
@@ -449,13 +464,13 @@ async function createServer(): Promise<FastifyInstance> {
     return barConfigController.getConfig(request, reply);
   });
 
-  app.patch("/api/bar/config", { onRequest: [authenticateToken, requireBarPermission("business.edit")] }, async (request, reply) => {
+  app.patch("/api/bar/config", { onRequest: [authenticateToken, requireBarPermission("fraud.config")] }, async (request, reply) => {
     return barConfigController.updateConfig(request, reply);
   });
 
   // ==================== GEO ENDPOINTS (proxy Google, chiave solo lato server) ====================
 
-  const geoLimit = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
+  const geoLimit = { config: { rateLimit: { max: 60, timeWindow: "1 minute", keyGenerator: userRateKey } } };
 
   app.get("/api/geo/autocomplete", { onRequest: [authenticateToken], ...geoLimit }, async (request, reply) => {
     return geoController.autocomplete(request, reply);

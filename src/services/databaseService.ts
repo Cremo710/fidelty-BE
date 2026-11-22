@@ -21,6 +21,16 @@ export class DatabaseService {
       ssl: {
         rejectUnauthorized: true,
       },
+      max: 10,
+      // Senza timeout, a pool esaurito le query restano in attesa per sempre.
+      // 10 s lasciano margine al risveglio di Neon dopo la sospensione.
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 30_000,
+    });
+
+    // Un client inattivo chiuso da Neon emette 'error' sul pool: senza listener il processo termina
+    this.pool.on("error", (error) => {
+      console.error("❌ Errore su un client PostgreSQL inattivo:", error.message);
     });
 
     console.log("🗄️  Pool di connessioni PostgreSQL inizializzato");

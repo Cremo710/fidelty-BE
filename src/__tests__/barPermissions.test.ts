@@ -3,11 +3,19 @@ import { BAR_ROLE_PERMISSIONS, hasBarPermission } from "../utils/barPermissions.
 import { canInviteRole, getTeamMutationDenial } from "../utils/barTeamPolicy.js";
 
 describe("bar team role permissions", () => {
-  it("grants manager and co-manager the full admin permission set", () => {
-    expect(BAR_ROLE_PERMISSIONS.manager).toEqual(BAR_ROLE_PERMISSIONS.co_manager);
+  it("grants co-manager the manager set except owner-only permissions", () => {
+    const ownerOnly = ["business.delete", "fraud.config"] as const;
     for (const permission of BAR_ROLE_PERMISSIONS.manager) {
       expect(hasBarPermission("manager", permission)).toBe(true);
-      expect(hasBarPermission("co_manager", permission)).toBe(true);
+      expect(hasBarPermission("co_manager", permission)).toBe(!ownerOnly.includes(permission as typeof ownerOnly[number]));
+    }
+    expect(BAR_ROLE_PERMISSIONS.co_manager.every((permission) => hasBarPermission("manager", permission))).toBe(true);
+  });
+
+  it("keeps bar deletion and anti-fraud config away from co-managers and waiters", () => {
+    for (const role of ["co_manager", "waiter"] as const) {
+      expect(hasBarPermission(role, "business.delete")).toBe(false);
+      expect(hasBarPermission(role, "fraud.config")).toBe(false);
     }
   });
 
