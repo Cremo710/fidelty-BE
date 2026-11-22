@@ -74,7 +74,7 @@ export class OfferRepository {
   async getOffersByBarId(barId: string): Promise<OfferDTO[]> {
     try {
       const query = `
-        SELECT * FROM offers WHERE bar_id = $1 ORDER BY created_at ASC
+        SELECT * FROM offers WHERE bar_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC
       `;
       const result = await databaseService.getPool().query(query, [barId]);
       return result.rows || [];
@@ -89,7 +89,7 @@ export class OfferRepository {
    */
   async findByIdAndBarId(id: string, barId: string): Promise<OfferDTO | null> {
     try {
-      const query = "SELECT * FROM offers WHERE id = $1 AND bar_id = $2 LIMIT 1";
+      const query = "SELECT * FROM offers WHERE id = $1 AND bar_id = $2 AND deleted_at IS NULL LIMIT 1";
       const result = await databaseService.getPool().query(query, [id, barId]);
       return result.rows[0] || null;
     } catch (error) {
@@ -100,7 +100,7 @@ export class OfferRepository {
 
   async findById(id: string): Promise<OfferDTO | null> {
     try {
-      const query = "SELECT * FROM offers WHERE id = $1 LIMIT 1";
+      const query = "SELECT * FROM offers WHERE id = $1 AND deleted_at IS NULL LIMIT 1";
       const result = await databaseService.getPool().query(query, [id]);
       return result.rows[0] || null;
     } catch (error) {
@@ -137,7 +137,7 @@ export class OfferRepository {
       fields.push(`updated_at = CURRENT_TIMESTAMP`);
       values.push(id, barId);
 
-      const query = `UPDATE offers SET ${fields.join(", ")} WHERE id = $${paramCount++} AND bar_id = $${paramCount} RETURNING id`;
+      const query = `UPDATE offers SET ${fields.join(", ")} WHERE id = $${paramCount++} AND bar_id = $${paramCount} AND deleted_at IS NULL RETURNING id`;
       const result = await client.query(query, values);
 
       await client.query("COMMIT");
@@ -152,7 +152,9 @@ export class OfferRepository {
   }
 
   /**
-   * Elimina un'offerta
+   * Elimina un'offerta (eliminazione logica): lo storico dei riscatti resta consultabile.
+   * I riscatti ancora in corso vengono annullati, così i punti congelati tornano disponibili
+   * e il QR non è più validabile.
    */
   async deleteOffer(id: string, barId: string): Promise<boolean> {
     const client = await databaseService.getPool().connect();
@@ -160,9 +162,20 @@ export class OfferRepository {
     try {
       await client.query("BEGIN");
       const result = await client.query(
-        "DELETE FROM offers WHERE id = $1 AND bar_id = $2 RETURNING id",
+        `UPDATE offers
+         SET deleted_at = NOW(), is_active = false, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND bar_id = $2 AND deleted_at IS NULL
+         RETURNING id`,
         [id, barId]
       );
+      if (result.rows.length > 0) {
+        await client.query(
+          `UPDATE offer_redemptions
+           SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+           WHERE offer_id = $1 AND status = 'frozen'`,
+          [id]
+        );
+      }
       await client.query("COMMIT");
       return result.rows.length > 0;
     } catch (error) {
