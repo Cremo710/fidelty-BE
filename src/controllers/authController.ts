@@ -19,6 +19,9 @@ import {
   type LoginInput,
   type RefreshInput,
 } from "../validators/authValidator.js";
+import { decideRefresh } from "../utils/refreshTokenPolicy.js";
+
+const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // allineato al default "7d" di generateRefreshToken
 
 const DEFAULT_EMAIL_VERIFICATION_TTL_HOURS = 24;
 const DEFAULT_PASSWORD_RESET_TTL_MINUTES = 30;
@@ -319,18 +322,7 @@ export class AuthController {
         });
       }
 
-      // Verifica che il refresh token sia nel database e non revocato
-      const storedToken = await userRepository.findRefreshToken(input.refreshToken);
-      if (!storedToken || storedToken.revoked) {
-        console.log(`⚠️  Refresh token revocato o non trovato per utente: ${decoded.userId}`);
-        return reply.status(401).send({
-          success: false,
-          error: "Refresh token revocato o non trovato",
-          code: "REVOKED_REFRESH_TOKEN",
-        });
-      }
-
-      // Recupera l'utente dal database
+      // Recupera l'utente prima della transazione (nessuna query sul pool con un client aperto)
       const user = await userRepository.findById(decoded.userId);
       if (!user) {
         console.log(`⚠️  Utente non trovato per refresh token`);
@@ -341,10 +333,79 @@ export class AuthController {
         });
       }
 
+      // Verifica il token nel database (per hash) e, se il client lo chiede, lo ruota.
+      // La rotazione è opzionale finché esistono build dell'app che non salvano il nuovo token.
+      const client = await databaseService.getPool().connect();
+      let newRefreshToken: string | undefined;
+      try {
+        await client.query("BEGIN");
+        const storedToken = await userRepository.findRefreshTokenForUpdate(client, input.refreshToken);
+        if (!storedToken || storedToken.user_id !== user.id) {
+          await client.query("ROLLBACK");
+          console.log(`⚠️  Refresh token non trovato per utente: ${decoded.userId}`);
+          return reply.status(401).send({
+            success: false,
+            error: "Refresh token revocato o non trovato",
+            code: "REVOKED_REFRESH_TOKEN",
+          });
+        }
+
+        const activeInFamily = await client.query(
+          "SELECT 1 FROM refresh_tokens WHERE family_id = $1 AND revoked = false LIMIT 1",
+          [storedToken.family_id],
+        );
+        const decision = decideRefresh(storedToken, {
+          now: Date.now(),
+          familyHasActiveToken: (activeInFamily.rowCount ?? 0) > 0,
+        });
+
+        if (decision.action === "reject_and_revoke_family") {
+          // Un token già sostituito è stato riusato: chi lo presenta potrebbe averlo rubato
+          await client.query("UPDATE refresh_tokens SET revoked = true WHERE family_id = $1", [storedToken.family_id]);
+          await client.query("COMMIT");
+          console.warn(`🚨 Riuso di refresh token ruotato per utente ${user.id}: sessione revocata`);
+          return reply.status(401).send({
+            success: false,
+            error: "Sessione non più valida. Esegui di nuovo il login.",
+            code: decision.code,
+          });
+        }
+        if (decision.action === "reject" || (storedToken.revoked && !input.rotate)) {
+          await client.query("ROLLBACK");
+          return reply.status(401).send({
+            success: false,
+            error: "Refresh token revocato o non trovato",
+            code: "REVOKED_REFRESH_TOKEN",
+          });
+        }
+
+        if (input.rotate) {
+          if (!storedToken.revoked) {
+            await client.query(
+              "UPDATE refresh_tokens SET revoked = true, rotated_at = NOW() WHERE id = $1",
+              [storedToken.id],
+            );
+          }
+          newRefreshToken = authService.generateRefreshToken(user.id, user.email);
+          await userRepository.saveRefreshToken(
+            user.id,
+            newRefreshToken,
+            new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+            { familyId: storedToken.family_id, client },
+          );
+        }
+        await client.query("COMMIT");
+      } catch (txError) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw txError;
+      } finally {
+        client.release();
+      }
+
       // Genera nuovo access token
       const newAccessToken = authService.generateToken(user.id, user.email, "15m");
 
-      console.log(`✅ Refresh token accettato per: ${user.email}`);
+      console.log(`✅ Refresh token accettato per utente: ${user.id}${newRefreshToken ? " (ruotato)" : ""}`);
 
       return reply.status(200).send({
         success: true,
@@ -352,6 +413,7 @@ export class AuthController {
         data: {
           accessToken: newAccessToken,
           expiresIn: 900, // 15 minuti in secondi
+          ...(newRefreshToken ? { refreshToken: newRefreshToken } : {}),
         },
       });
     } catch (error) {
@@ -374,23 +436,15 @@ export class AuthController {
     try {
       console.log("🚪 Ricevuta richiesta di logout");
 
-      const body = request.body as unknown;
-      const userId = (request as any).userId;
-
-      if (!userId) {
-        return reply.status(401).send({
-          success: false,
-          error: "Utente non autenticato",
-          code: "UNAUTHORIZED",
-        });
-      }
-
-      // Verifica se è stato passato un refresh token da revocare
-      const refreshTokenData = body as any;
-      if (refreshTokenData?.refreshToken) {
-        // Revoca il refresh token dal database
-        await userRepository.revokeRefreshToken(refreshTokenData.refreshToken);
-        console.log(`✅ Refresh token revocato per utente: ${userId}`);
+      // Il logout non richiede un access token valido (può essere già scaduto):
+      // basta presentare il refresh token, che viene revocato insieme alla sua famiglia.
+      const refreshToken = (request.body as { refreshToken?: unknown } | undefined)?.refreshToken;
+      if (typeof refreshToken === "string" && refreshToken) {
+        const decoded = getAuthService().verifyRefreshToken(refreshToken);
+        if (decoded) {
+          await userRepository.revokeRefreshTokenFamily(refreshToken);
+          console.log(`✅ Refresh token revocato per utente: ${decoded.userId}`);
+        }
       }
 
       return reply.status(200).send({

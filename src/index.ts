@@ -171,8 +171,8 @@ async function createServer(): Promise<FastifyInstance> {
     return authController.confirmPasswordReset(request, reply);
   });
 
-  // User logout endpoint
-  app.post("/api/auth/logout", { onRequest: [authenticateToken] }, async (request, reply) => {
+  // User logout endpoint: revoca il refresh token presentato, anche con access token già scaduto
+  app.post("/api/auth/logout", strictLimit(30), async (request, reply) => {
     return authController.logout(request, reply);
   });
 

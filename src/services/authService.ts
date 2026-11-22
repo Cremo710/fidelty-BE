@@ -1,5 +1,6 @@
 import { hash, verify } from "argon2";
 import jwt, { SignOptions, JwtPayload } from "jsonwebtoken";
+import { randomUUID } from "crypto";
 import { requireSecret } from "../utils/env.js";
 
 interface JWTPayload {
@@ -106,6 +107,9 @@ export class AuthService {
       const signOptions = {
         expiresIn,
         algorithm: "HS256" as const,
+        // jti casuale: due token emessi nello stesso secondo per lo stesso utente restano distinti
+        // (necessario per la rotazione e per l'unicità dell'hash nel database)
+        jwtid: randomUUID(),
       };
 
       return jwt.sign(payload, this.refreshTokenSecret, signOptions as any);

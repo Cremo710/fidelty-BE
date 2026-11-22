@@ -3,6 +3,7 @@ import { ulid } from "ulid";
 import type { PoolClient } from "pg";
 import { generateUniquePublicId, PUBLIC_ID_MAX_ATTEMPTS } from "../utils/publicId.js";
 import { summarizeBody } from "../utils/socialAuthDiagnostics.js";
+import { hashRefreshToken } from "../utils/refreshTokenPolicy.js";
 
 function isPublicIdCollision(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
@@ -287,21 +288,23 @@ export class UserRepository {
   }
 
   /**
-   * Salva un refresh token nel database
+   * Salva un refresh token nel database (solo il suo hash).
+   * Senza familyId apre una nuova famiglia: un login = una famiglia, che la rotazione prosegue.
    */
   async saveRefreshToken(
     userId: string,
     token: string,
-    expiresAt: Date
+    expiresAt: Date,
+    options: { familyId?: string; client?: PoolClient } = {}
   ): Promise<void> {
     const query = `
-      INSERT INTO refresh_tokens (user_id, token, expires_at, revoked)
-      VALUES ($1, $2, $3, false)
-      ON CONFLICT (token) DO UPDATE SET revoked = false
+      INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at, revoked)
+      VALUES ($1, $2, $3, $4, false)
     `;
 
     try {
-      await databaseService.getPool().query(query, [userId, token, expiresAt]);
+      const db = options.client ?? databaseService.getPool();
+      await db.query(query, [userId, hashRefreshToken(token), options.familyId ?? ulid(), expiresAt]);
       console.log(`✅ Refresh token salvato per utente: ${userId}`);
     } catch (error) {
       console.error("Errore nel salvataggio del refresh token:", error);
@@ -310,37 +313,39 @@ export class UserRepository {
   }
 
   /**
-   * Recupera un refresh token dal database
+   * Recupera un refresh token per hash, bloccandone la riga fino a fine transazione
    */
-  async findRefreshToken(token: string): Promise<any> {
-    const query = `
-      SELECT id, user_id, token, expires_at, revoked, created_at
-      FROM refresh_tokens
-      WHERE token = $1
-    `;
-
-    try {
-      const result = await databaseService.getPool().query(query, [token]);
-      return result.rows[0] || null;
-    } catch (error) {
-      console.error("Errore nel recupero del refresh token:", error);
-      throw error;
-    }
+  async findRefreshTokenForUpdate(client: PoolClient, token: string): Promise<{
+    id: number;
+    user_id: string;
+    family_id: string;
+    revoked: boolean;
+    rotated_at: Date | null;
+  } | null> {
+    const result = await client.query(
+      `SELECT id, user_id, family_id, revoked, rotated_at
+       FROM refresh_tokens
+       WHERE token_hash = $1
+       FOR UPDATE`,
+      [hashRefreshToken(token)],
+    );
+    return result.rows[0] || null;
   }
 
   /**
-   * Revoca un refresh token (logout)
+   * Revoca tutta la famiglia del refresh token indicato (logout o riuso sospetto)
    */
-  async revokeRefreshToken(token: string): Promise<void> {
+  async revokeRefreshTokenFamily(token: string, client?: PoolClient): Promise<void> {
     const query = `
       UPDATE refresh_tokens
       SET revoked = true
-      WHERE token = $1
+      WHERE family_id = (SELECT family_id FROM refresh_tokens WHERE token_hash = $1)
+        AND revoked = false
     `;
 
     try {
-      await databaseService.getPool().query(query, [token]);
-      console.log("✅ Refresh token revocato");
+      await (client ?? databaseService.getPool()).query(query, [hashRefreshToken(token)]);
+      console.log("✅ Famiglia di refresh token revocata");
     } catch (error) {
       console.error("Errore nella revoca del refresh token:", error);
       throw error;

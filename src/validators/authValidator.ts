@@ -38,6 +38,8 @@ export const refreshSchema = z.object({
   refreshToken: z
     .string()
     .min(1, "Refresh token obbligatorio"),
+  // true dalle build dell'app che salvano il nuovo refresh token restituito
+  rotate: z.boolean().optional(),
 });
 
 export const emailRequestSchema = z.object({
