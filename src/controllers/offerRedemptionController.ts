@@ -307,6 +307,11 @@ export class OfferRedemptionController {
         return reply.status(403).send({ success: false, error: "QR destinato a un altro bar", code: "WRONG_BAR" });
       }
 
+      // payload.userId è firmato e più avanti confrontato con redemption.user_id
+      if (payload.userId === validatorUserId) {
+        return reply.status(403).send({ success: false, error: "Non puoi validare un tuo riscatto", code: "SELF_VALIDATION_NOT_ALLOWED" });
+      }
+
       await client.query("BEGIN");
       await offerRedemptionRepository.expireStaleRedemptions(client);
 

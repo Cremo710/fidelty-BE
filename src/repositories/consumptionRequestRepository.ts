@@ -306,6 +306,10 @@ export class ConsumptionRequestRepository {
       const participantIds = participantResult.rows.length > 0
         ? participantResult.rows.map((participant) => participant.user_id)
         : [existing.requester_user_id];
+      // Chi approva non può essere il richiedente né uno dei partecipanti che ricevono punti
+      if (existing.requester_user_id === input.processedByUserId || participantIds.includes(input.processedByUserId)) {
+        throw new Error("SELF_APPROVAL_NOT_ALLOWED");
+      }
       const allocations = splitPointsEqually(pointsEarned, participantIds);
 
       for (const [participantOrder, allocation] of allocations.entries()) {

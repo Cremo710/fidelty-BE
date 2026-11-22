@@ -15,6 +15,7 @@ import { extractDocId, extractReceiptFields } from "../services/visionOcrService
 import { isValidItalianVatNumber, validateReceiptOcr } from "../services/receiptValidation.js";
 import { deleteCloudinaryImageByUrl, getSignedCloudinaryUrl, uploadReceiptImage } from "../utils/imageUpload.js";
 import { splitPointsEqually } from "../utils/pointsAllocation.js";
+import { findBarStaffUserIds, isBarStaff } from "../utils/barStaff.js";
 
 const RECEIPT_IMAGE_RETENTION_DAYS = Number(process.env.RECEIPT_IMAGE_RETENTION_DAYS || 90);
 
@@ -753,8 +754,9 @@ export class ConsumptionRequestController {
         });
       }
 
-      if (bar.user_id === userId) {
-        return reply.status(400).send({ success: false, error: "Non puoi inviare una richiesta al tuo stesso bar", code: "SELF_REQUEST_NOT_ALLOWED" });
+      // Titolare e membri attivi del team non possono guadagnare punti nel proprio bar
+      if (bar.user_id === userId || await isBarStaff(databaseService.getPool(), bar.id, userId)) {
+        return reply.status(400).send({ success: false, error: "Non puoi inviare una richiesta a un bar di cui fai parte", code: "SELF_REQUEST_NOT_ALLOWED" });
       }
 
       // ── Transazione con lock per utente/bar: valutazione e inserimento sono atomici ──
@@ -791,7 +793,18 @@ export class ConsumptionRequestController {
               code: "RECEIPT_PARTICIPANTS_MUST_BE_FRIENDS",
             });
           }
-          participantUserIds = [userId, ...friendsResult.rows.map((friend) => friend.id)];
+          const friendIds = friendsResult.rows.map((friend) => friend.id);
+          const staffParticipants = await findBarStaffUserIds(client, bar.id, friendIds);
+          if (staffParticipants.length > 0) {
+            await client.query("ROLLBACK");
+            releaseClient();
+            return reply.status(403).send({
+              success: false,
+              error: "Il titolare e lo staff del bar non possono ricevere punti da questo scontrino",
+              code: "RECEIPT_PARTICIPANT_IS_BAR_STAFF",
+            });
+          }
+          participantUserIds = [userId, ...friendIds];
         }
         evaluation = await semaphoreService.evaluate({
           userId,
@@ -1144,6 +1157,10 @@ export class ConsumptionRequestController {
         return reply.status(409).send({ success: false, error: "Richiesta già elaborata", code: errorMessage });
       }
 
+      if (errorMessage === "SELF_APPROVAL_NOT_ALLOWED") {
+        return reply.status(403).send({ success: false, error: "Non puoi elaborare una richiesta da cui ricevi punti", code: errorMessage });
+      }
+
       console.error("❌ Errore aggiornamento richiesta consumo:", error);
       return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CONSUMPTION_REQUEST_UPDATE_ERROR" });
     }
@@ -1180,8 +1197,10 @@ export class ConsumptionRequestController {
       if (!targetUser) {
         return reply.status(404).send({ success: false, error: "Utente non trovato", code: "USER_NOT_FOUND" });
       }
-      if (targetUser.id === bar.user_id) {
-        return reply.status(400).send({ success: false, error: "Non puoi accreditare punti al titolare del bar", code: "SELF_CREDIT_NOT_ALLOWED" });
+      // Nessun accredito manuale a sé stessi, al titolare o a un membro attivo del team
+      if (targetUser.id === userId || targetUser.id === bar.user_id
+        || await isBarStaff(databaseService.getPool(), bar.id, targetUser.id)) {
+        return reply.status(400).send({ success: false, error: "Non puoi accreditare punti a te stesso o allo staff del bar", code: "SELF_CREDIT_NOT_ALLOWED" });
       }
 
       const [platformConfig, barCfgManual] = await Promise.all([
@@ -1235,9 +1254,9 @@ export class ConsumptionRequestController {
           `INSERT INTO consumption_requests (
               id, requester_user_id, bar_id, amount, points_preview, status,
               qr_code_value, requester_name_snapshot, requester_email_snapshot,
-              semaphore_status, signal_flags, updated_at
+              semaphore_status, signal_flags, processed_by_user_id, updated_at
            )
-           VALUES ($1,$2,$3,$4,$5,'credited',$6,$7,$8,'green',$9,CURRENT_TIMESTAMP)
+           VALUES ($1,$2,$3,$4,$5,'credited',$6,$7,$8,'green',$9,$10,CURRENT_TIMESTAMP)
            RETURNING *`,
           [
             (await import("ulid")).ulid(),
@@ -1249,6 +1268,7 @@ export class ConsumptionRequestController {
             targetUser.name || null,
             targetUser.email || null,
             JSON.stringify([{ code: "MANUAL_BAR_CREDIT", reason: signalReason }]),
+            userId,
           ],
         );
         created = insertResult.rows[0];
