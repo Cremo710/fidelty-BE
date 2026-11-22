@@ -19,7 +19,7 @@ export class BarTeamService {
          CASE WHEN b.user_id = $1 THEN 'manager' ELSE tm.role END AS role
        FROM bars b
        LEFT JOIN bar_team_members tm ON tm.bar_id = b.id AND tm.user_id = $1 AND tm.status = 'active'
-       WHERE b.user_id = $1 OR tm.user_id = $1
+       WHERE b.deleted_at IS NULL AND (b.user_id = $1 OR tm.user_id = $1)
        ORDER BY b.name`,
       [userId],
     );

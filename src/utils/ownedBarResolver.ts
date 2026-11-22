@@ -15,7 +15,7 @@ export async function resolveOwnedBarForRequest(request: FastifyRequest): Promis
     const result = await databaseService.getPool().query(
       `SELECT b.* FROM bars b
        LEFT JOIN bar_team_members tm ON tm.bar_id = b.id AND tm.user_id = $2 AND tm.status = 'active'
-       WHERE b.id = $1 AND (b.user_id = $2 OR tm.user_id = $2)
+       WHERE b.id = $1 AND b.deleted_at IS NULL AND (b.user_id = $2 OR tm.user_id = $2)
        LIMIT 1`,
       [String(barId), userId],
     );
@@ -25,7 +25,7 @@ export async function resolveOwnedBarForRequest(request: FastifyRequest): Promis
   const accessible = await databaseService.getPool().query(
     `SELECT b.* FROM bars b
      LEFT JOIN bar_team_members tm ON tm.bar_id = b.id AND tm.user_id = $1 AND tm.status = 'active'
-     WHERE b.user_id = $1 OR tm.user_id = $1
+     WHERE b.deleted_at IS NULL AND (b.user_id = $1 OR tm.user_id = $1)
      ORDER BY b.created_at
      LIMIT 2`,
     [userId],
@@ -45,7 +45,7 @@ export async function isBarSelectionMissing(request: FastifyRequest): Promise<bo
   const accessibleBars = await databaseService.getPool().query(
     `SELECT b.id FROM bars b
      LEFT JOIN bar_team_members tm ON tm.bar_id = b.id AND tm.user_id = $1 AND tm.status = 'active'
-     WHERE b.user_id = $1 OR tm.user_id = $1
+     WHERE b.deleted_at IS NULL AND (b.user_id = $1 OR tm.user_id = $1)
      LIMIT 2`,
     [userId],
   );

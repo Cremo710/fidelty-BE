@@ -555,12 +555,16 @@ export class ConsumptionRequestController {
         ],
       );
 
+      // Lo stesso valore usato al Passo 2: l'anteprima punti nell'app coincide con l'accredito
+      const { pointsPerEuro } = await platformConfigRepository.get();
+
       return reply.status(200).send({
         success: true,
         data: {
           ocrSessionId: sessionId,
           // Campi estratti (solo per visualizzazione — il server li userà dal DB al Passo 2)
           ...mappedOcrData,
+          pointsPerEuro,
         },
       });
     } catch (error) {
@@ -855,21 +859,26 @@ export class ConsumptionRequestController {
       let created: ConsumptionRequestDTO;
       let requester: Awaited<ReturnType<typeof userRepository.findById>>;
       try {
-        const identityResult = await client.query(
-          `INSERT INTO receipt_ocr_identities (session_id, vat_number, doc_id, receipt_date, amount)
-           SELECT id, vat_number, doc_id, receipt_date, amount
-           FROM receipt_ocr_sessions
-           WHERE id = $1 AND consumed_at IS NULL
-           RETURNING session_id`,
-          [ocrSession.id],
-        );
-        if (identityResult.rowCount !== 1) {
-          await client.query("ROLLBACK");
-          return reply.status(409).send({
-            success: false,
-            error: "Questo scontrino risulta già utilizzato.",
-            code: "DUPLICATE_RECEIPT_IDENTITY",
-          });
+        // Uno scontrino rifiutato in automatico (rosso) non ne "brucia" l'identità: l'utente può
+        // ripresentarlo, per esempio dopo aver disattivato la posizione simulata.
+        // Il doppio invio della stessa sessione resta bloccato dall'UPDATE su consumed_at più sotto.
+        if (!isRed) {
+          const identityResult = await client.query(
+            `INSERT INTO receipt_ocr_identities (session_id, vat_number, doc_id, receipt_date, amount)
+             SELECT id, vat_number, doc_id, receipt_date, amount
+             FROM receipt_ocr_sessions
+             WHERE id = $1 AND consumed_at IS NULL
+             RETURNING session_id`,
+            [ocrSession.id],
+          );
+          if (identityResult.rowCount !== 1) {
+            await client.query("ROLLBACK");
+            return reply.status(409).send({
+              success: false,
+              error: "Questo scontrino risulta già utilizzato.",
+              code: "DUPLICATE_RECEIPT_IDENTITY",
+            });
+          }
         }
 
         requester = await userRepository.findById(userId);
@@ -906,7 +915,8 @@ export class ConsumptionRequestController {
             `INSERT INTO consumption_request_participants (
                request_id, user_id, participant_order, points_allocated
              ) VALUES ($1, $2, $3, $4)`,
-            [created.id, allocation.userId, participantOrder, allocation.pointsAllocated],
+            // Richiesta rifiutata: i partecipanti restano registrati, ma senza punti assegnati
+            [created.id, allocation.userId, participantOrder, isRed ? 0 : allocation.pointsAllocated],
           );
         }
 

@@ -289,7 +289,8 @@ async function createServer(): Promise<FastifyInstance> {
     return barTeamController.removeMember(request, reply);
   });
 
-  app.post("/api/bar/team/leave", { onRequest: [authenticateToken] }, async (request, reply) => {
+  // staff.view (tutti i ruoli) imposta selectedBarId da X-Bar-Id: senza guard leaveTeam rispondeva sempre 400
+  app.post("/api/bar/team/leave", { onRequest: [authenticateToken, requireBarPermission("staff.view")] }, async (request, reply) => {
     return barTeamController.leaveTeam(request, reply);
   });
 
