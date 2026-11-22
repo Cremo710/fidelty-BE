@@ -828,6 +828,7 @@ export class ConsumptionRequestController {
           hasOcrSession: !!ocrSession,
           isMockedLocation,
           imageSha256: ocrSession ? (ocrSession as any).image_sha256 ?? null : null,
+          ocrSessionId: ocrSession?.id ?? null,
           ocrFieldsFound: ocrSession && (ocrSession as any).fields_found
             ? {
                 amount:    Boolean((ocrSession as any).fields_found?.amount),

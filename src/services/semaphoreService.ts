@@ -28,6 +28,7 @@ export interface SignalFlag {
     | "MOCK_LOCATION"      // Fase 2 — rosso
     | "DATE_MISMATCH"      // Fase 2 — giallo
     | "AMOUNT_CORRECTED"   // importo corretto dal barista in approvazione
+    | "SAME_RECEIPT_NUMBER"// giallo: P.IVA, data e numero di uno scontrino già usato
     | "OCR_LOW_CONFIDENCE";// Fase 2 — giallo
   reason: string;
   /** reject = rosso (rifiuto automatico); review = giallo (coda barista) */
@@ -55,6 +56,7 @@ export interface SemaphoreInput {
   hasOcrSession?: boolean;          // false = digitazione manuale → MANUAL_ENTRY
   isMockedLocation?: boolean;       // per MOCK_LOCATION
   imageSha256?: string | null;      // per DUPLICATE_IMAGE
+  ocrSessionId?: string | null;     // per SAME_RECEIPT_NUMBER
   ocrFieldsFound?: { amount: boolean; vatNumber: boolean; docId?: boolean; date?: boolean } | null; // per OCR_LOW_CONFIDENCE
 }
 
@@ -214,6 +216,33 @@ export class SemaphoreService {
           code: "DUPLICATE_IMAGE",
           severity: "reject",
           reason: "Questa foto scontrino risulta già utilizzata da un altro utente.",
+        });
+      }
+    }
+
+    // SAME_RECEIPT_NUMBER (giallo): esiste già uno scontrino usato con stessa P.IVA, stessa data
+    // e stesso numero documento. L'identità esatta (che include l'importo) è già bloccata dal vincolo
+    // unico; qui si intercetta lo stesso scontrino riletto con un altro importo o con il numero in un
+    // altro formato (0345 / 0012-0345). Due scontrini diversi con lo stesso numero (es. due casse)
+    // non vengono bloccati: passano in coda al barista.
+    if (input.ocrSessionId) {
+      const sameNumber = await pool.query(
+        `SELECT 1
+         FROM receipt_ocr_sessions s
+         JOIN receipt_ocr_identities i
+           ON i.vat_number = s.vat_number
+          AND i.receipt_date = s.receipt_date
+          AND regexp_replace(i.doc_id, '^[0-9]{4}-', '') = regexp_replace(s.doc_id, '^[0-9]{4}-', '')
+          AND i.session_id <> s.id
+         WHERE s.id = $1
+         LIMIT 1`,
+        [input.ocrSessionId],
+      );
+      if (sameNumber.rows.length > 0) {
+        signals.push({
+          code: "SAME_RECEIPT_NUMBER",
+          severity: "review",
+          reason: "Uno scontrino con stessa P.IVA, data e numero è già stato usato: verifica che non sia lo stesso.",
         });
       }
     }

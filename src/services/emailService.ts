@@ -70,6 +70,55 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#039;");
 }
 
+const EMAIL_ASSET_BASE_URL = (process.env.EMAIL_ASSET_BASE_URL || "https://fidelty.app/email").replace(/\/+$/, "");
+const EMAIL_SITE_URL = "https://fidelty.app";
+
+export function renderPlainTextEmail(subject: string, text: string): string {
+  const tierStrip = [
+    { width: "40%", color: "#B87333" },
+    { width: "20%", color: "#D4A62A" },
+    { width: "20%", color: "#6FC3DF" },
+    { width: "20%", color: "#5B2A86" },
+  ]
+    .map(
+      ({ width, color }) =>
+        `<td width="${width}" height="6" bgcolor="${color}" style="height:6px;background-color:${color};font-size:0;line-height:0;">&nbsp;</td>`,
+    )
+    .join("");
+
+  return `<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
+<title>${escapeHtml(subject)}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F4F2F9;-webkit-text-size-adjust:100%;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F4F2F9" style="background-color:#F4F2F9;">
+<tr><td align="center" style="padding:28px 12px;">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
+<tr><td bgcolor="#15102A" style="padding:22px 32px 18px;background-color:#15102A;border-radius:8px 8px 0 0;">
+<a href="${EMAIL_SITE_URL}" style="text-decoration:none;"><img src="${escapeHtml(EMAIL_ASSET_BASE_URL)}/logo-white.png" width="150" alt="Fidelty" style="display:block;width:150px;max-width:150px;height:auto;border:0;outline:none;"></a>
+</td></tr>
+<tr><td style="padding:0;font-size:0;line-height:0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${tierStrip}</tr></table></td></tr>
+<tr><td bgcolor="#FFFFFF" style="padding:36px 32px 36px;background-color:#FFFFFF;border-radius:0 0 8px 8px;">
+<h1 style="margin:0 0 20px;font-family:Georgia,'Times New Roman',serif;font-size:24px;line-height:30px;font-weight:bold;color:#15102A;">${escapeHtml(subject)}</h1>
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:24px;color:#2A2540;white-space:pre-line;">${escapeHtml(text)}</div>
+</td></tr>
+<tr><td align="center" style="padding:24px 16px 8px;">
+<p style="margin:0 0 8px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#6F6B85;">Questa email è stata inviata da Fidelty.</p>
+<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#6F6B85;"><a href="${EMAIL_SITE_URL}" style="color:#6F6B85;text-decoration:underline;">fidelty.app</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="mailto:support@fidelty.app" style="color:#6F6B85;text-decoration:underline;">Assistenza</a></p>
+<p style="margin:12px 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#9A96AE;">&copy; ${new Date().getFullYear()} fidelty</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
+}
+
 class EmailService {
   private resendClient: Resend | null = null;
   private resendInitialized = false;
@@ -544,15 +593,10 @@ class EmailService {
     });
   }
   async sendPlainTextEmail(input: { recipientEmail: string; subject: string; text: string }): Promise<EmailSendResult> {
-    const escaped = input.text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-
     return this.sendWithDefaultSender({
       recipientEmail: input.recipientEmail,
       subject: input.subject,
-      html: `<pre style="font-family:monospace;font-size:13px;line-height:1.5;">${escaped}</pre>`,
+      html: renderPlainTextEmail(input.subject, input.text),
       text: input.text,
       kind: "testo semplice",
     });
