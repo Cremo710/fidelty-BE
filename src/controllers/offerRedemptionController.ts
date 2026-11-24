@@ -103,7 +103,7 @@ export class OfferRedemptionController {
       await client.query("BEGIN");
       await offerRedemptionRepository.expireStaleRedemptions(client);
 
-      const offer = await offerRepository.findById(offerId);
+      const offer = await offerRepository.findById(offerId, client);
       if (!offer || !offer.is_active) {
         await client.query("ROLLBACK");
         return reply.status(404).send({ success: false, error: "Offerta non disponibile", code: "OFFER_NOT_FOUND" });
@@ -155,7 +155,7 @@ export class OfferRedemptionController {
         });
       }
 
-      const pointsSnapshot = await offerRedemptionRepository.getUserBarPointsSnapshot(userId, offer.bar_id);
+      const pointsSnapshot = await offerRedemptionRepository.getUserBarPointsSnapshot(userId, offer.bar_id, client);
       if (!pointsSnapshot) {
         await client.query("ROLLBACK");
         return reply.status(404).send({ success: false, error: "Nessuna loyalty card disponibile per questo bar", code: "LOYALTY_CARD_NOT_FOUND" });

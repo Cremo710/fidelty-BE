@@ -260,6 +260,8 @@ export class ConsumptionRequestRepository {
     barPiva: string;
     correctedAmount?: number | null;
   }): Promise<ConsumptionRequestDTO> {
+    // Letta prima di prendere il client: dentro la transazione non si usa il pool
+    const platformConfig = await platformConfigRepository.get();
     const client = await databaseService.getPool().connect();
 
     try {
@@ -283,8 +285,6 @@ export class ConsumptionRequestRepository {
       if (!["pending"].includes(existing.status)) {
         throw new Error("CONSUMPTION_REQUEST_ALREADY_PROCESSED");
       }
-
-      const platformConfig = await platformConfigRepository.get();
 
       // Importo corretto dal barista: al massimo il doppio dell'importo originale
       const originalAmount = Number(existing.amount);

@@ -740,9 +740,10 @@ export class ConsumptionRequestController {
       }
 
       // Bar-specific GPS radius (from bar_config) or env/default fallback
-      const [barCfg, platformConfig] = await Promise.all([
+      const [barCfg, platformConfig, requesterRow] = await Promise.all([
         barConfigRepository.getByBarId(bar.id),
         platformConfigRepository.get(),
+        userRepository.findById(userId),
       ]);
       const maxDistanceMeters = barCfg.gpsRadiusMeters > 0
         ? barCfg.gpsRadiusMeters
@@ -771,6 +772,8 @@ export class ConsumptionRequestController {
       let evaluation: Awaited<ReturnType<typeof semaphoreService.evaluate>>;
       try {
         await client.query("BEGIN");
+        // Se il locale è molto affollato non teniamo occupata una connessione all'infinito in coda al lock
+        await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption:${userId}:${bar.id}`]);
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption-bar:${bar.id}`]);
         if (participantPublicIds.length > 0) {
@@ -818,6 +821,7 @@ export class ConsumptionRequestController {
           receiptCodeBlock2,
           barConfig: barCfg,
           client,
+          platformConfig,
           // Fase 2 — nuovi campi
           barPiva: bar.iva ?? null,
           ocrVatNumber: ocrSession ? (ocrSession as any).vat_number ?? null : undefined,
@@ -882,7 +886,7 @@ export class ConsumptionRequestController {
           }
         }
 
-        requester = await userRepository.findById(userId);
+        requester = requesterRow;
         const insertResult = await client.query(
           `INSERT INTO consumption_requests (
               id, requester_user_id, bar_id, amount, points_preview, status,
@@ -955,6 +959,13 @@ export class ConsumptionRequestController {
         await client.query("COMMIT");
       } catch (txErr) {
         await client.query("ROLLBACK");
+        if ((txErr as any)?.code === "55P03") {
+          return reply.status(503).send({
+            success: false,
+            error: "Il locale sta ricevendo molte richieste. Riprova tra qualche secondo.",
+            code: "SERVICE_UNAVAILABLE",
+          });
+        }
         if ((txErr as any)?.code === "23505" && (txErr as any)?.constraint === "uidx_receipt_ocr_identity") {
           return reply.status(409).send({
             success: false,

@@ -59,8 +59,12 @@ export class OfferRedemptionRepository {
     return result.rowCount || 0;
   }
 
-  async getUserBarPointsSnapshot(userId: string, barId: string): Promise<LoyaltyPointsSnapshot | null> {
-    const result = await databaseService.getPool().query(
+  async getUserBarPointsSnapshot(
+    userId: string,
+    barId: string,
+    executor: Queryable = databaseService.getPool(),
+  ): Promise<LoyaltyPointsSnapshot | null> {
+    const result = await executor.query(
       `
         SELECT
           lc.id AS loyalty_card_id,

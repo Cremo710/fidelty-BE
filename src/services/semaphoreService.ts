@@ -1,6 +1,6 @@
 import { databaseService } from "./databaseService.js";
 import type { BarConfigDTO } from "../repositories/barConfigRepository.js";
-import { platformConfigRepository } from "../repositories/platformConfigRepository.js";
+import { platformConfigRepository, type PlatformConfig } from "../repositories/platformConfigRepository.js";
 import {
   aggregateStatus,
   checkAnomaly,
@@ -49,6 +49,7 @@ export interface SemaphoreInput {
   receiptCodeBlock2: string | null;
   barConfig: BarConfigDTO;
   client?: import("pg").PoolClient;
+  platformConfig?: PlatformConfig; // già letta dal chiamante: evita una query sul pool dentro la transazione
   // Fase 2 — nuovi campi opzionali (default sicuro se assenti)
   barPiva?: string | null;          // P.IVA del bar: per PIVA_MISMATCH
   ocrVatNumber?: string | null;     // P.IVA letta dall'OCR
@@ -72,7 +73,7 @@ export class SemaphoreService {
     const signals: SignalFlag[] = [];
 
     // ── Platform config (cached) ──────────────────────────────────────────────
-    const platform = await platformConfigRepository.get();
+    const platform = input.platformConfig ?? await platformConfigRepository.get();
 
     // ── Rate limit (hard reject — not a yellow) ──────────────────────────────
     const rateLimitResult = await pool.query<{ cnt: string }>(
@@ -93,7 +94,7 @@ export class SemaphoreService {
     }
 
     // ── Signal 0: Daily points cap (user + bar) ────────────────────────────
-    const pointsPreview = Math.round(input.amount * (await platformConfigRepository.get()).pointsPerEuro);
+    const pointsPreview = Math.round(input.amount * platform.pointsPerEuro);
 
     const [userDailyResult, barDailyResult] = await Promise.all([
       pool.query<{ total: string }>(

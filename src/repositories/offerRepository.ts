@@ -1,5 +1,6 @@
 import { databaseService } from "../services/databaseService.js";
 import { ulid } from "ulid";
+import type { Pool, PoolClient } from "pg";
 import type { CreateOfferInput } from "../validators/offerValidator.js";
 
 export interface OfferDTO {
@@ -98,10 +99,13 @@ export class OfferRepository {
     }
   }
 
-  async findById(id: string): Promise<OfferDTO | null> {
+  async findById(
+    id: string,
+    executor: Pick<PoolClient, "query"> | Pool = databaseService.getPool(),
+  ): Promise<OfferDTO | null> {
     try {
       const query = "SELECT * FROM offers WHERE id = $1 AND deleted_at IS NULL LIMIT 1";
-      const result = await databaseService.getPool().query(query, [id]);
+      const result = await executor.query(query, [id]);
       return result.rows[0] || null;
     } catch (error) {
       console.error("❌ Errore durante il recupero offerta per ID:", error);
