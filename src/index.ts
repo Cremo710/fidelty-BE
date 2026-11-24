@@ -277,7 +277,10 @@ async function createServer(): Promise<FastifyInstance> {
     return barTeamController.getTeam(request, reply);
   });
 
-  app.post("/api/bar/team/invitations", { onRequest: [authenticateToken, requireBarPermission("staff.manage")] }, async (request, reply) => {
+  app.post("/api/bar/team/invitations", {
+    onRequest: [authenticateToken, requireBarPermission("staff.manage")],
+    config: { rateLimit: { max: 20, timeWindow: "1 hour", keyGenerator: userRateKey } },
+  }, async (request, reply) => {
     return barTeamController.invite(request, reply);
   });
 

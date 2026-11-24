@@ -144,9 +144,23 @@ describe.skipIf(!testUrl)("integrazione team bar (database di test)", () => {
     expect(invitationByCode.email).toBe(codeInvitee.email);
     const pendingByCode = (await barTeamService.listTeam(barId)).find((member) => member.id === invitationByCode.invitation.id);
     expect(pendingByCode).toMatchObject({ email: null, fullName: "Team test", status: "pending" });
+    // Un invito per email non deve rivelare se l'indirizzo è registrato né il nome dell'utente
+    const pendingByEmail = (await barTeamService.listTeam(barId)).find((member) => member.id === invitation.invitation.id);
+    expect(pendingByEmail).toMatchObject({ email: waiterEmail, fullName: null, status: "pending" });
     expect((await barTeamService.createInvitation({
       barId, actorUserId: managerId, actorRole: "manager", publicId: "ZZ-NOPE0", role: "waiter",
     })).code).toBe("USER_NOT_FOUND");
+    expect((await barTeamService.createInvitation({
+      barId, actorUserId: managerId, actorRole: "manager", publicId: codeInviteePublicId, role: "waiter",
+    })).code).toBe("TEAM_MEMBER_EXISTS");
+    expect((await barTeamService.createInvitation({
+      barId, actorUserId: waiterId, actorRole: "waiter", publicId: codeInviteePublicId, role: "waiter",
+    })).code).toBe("STAFF_MANAGEMENT_FORBIDDEN");
+    expect((await barTeamService.listReceivedInvitations(codeInvitee.email)).map(({ id }) => id))
+      .toContain(invitationByCode.invitation.id);
+    expect((await barTeamService.acceptInvitation(invitationByCode.invitation.id, codeInvitee.id, codeInvitee.email)).status)
+      .toBe(200);
+    expect((await barTeamService.getAccess(codeInvitee.id, barId))?.role).toBe("waiter");
 
     const createdConcurrentInvitations = await Promise.all([
       barTeamService.createInvitation({

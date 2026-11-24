@@ -51,14 +51,15 @@ export class BarTeamService {
     );
     const result = await databaseService.getPool().query(
       `SELECT tm.id,
-         CASE WHEN tm.status = 'pending' AND invitee.id IS NOT NULL THEN NULL ELSE tm.email END AS email,
+         CASE WHEN tm.status = 'pending' AND tm.invited_via = 'public_id' THEN NULL ELSE tm.email END AS email,
          tm.role, tm.status, tm.user_id = $2 AS "isCurrentUser",
          tm.expires_at AS "expiresAt",
          tm.created_at AS "createdAt", tm.accepted_at AS "acceptedAt",
          COALESCE(u.name, invitee.name) AS "fullName"
        FROM bar_team_members tm
        LEFT JOIN utenti u ON u.id = tm.user_id
-       LEFT JOIN utenti invitee ON tm.user_id IS NULL AND lower(invitee.email) = lower(tm.email)
+       LEFT JOIN utenti invitee
+         ON tm.user_id IS NULL AND tm.invited_via = 'public_id' AND lower(invitee.email) = tm.email
        WHERE tm.bar_id = $1 AND tm.status IN ('active', 'pending')
        ORDER BY CASE tm.role WHEN 'manager' THEN 0 WHEN 'co_manager' THEN 1 ELSE 2 END, tm.created_at`,
       [barId, currentUserId],
@@ -148,9 +149,10 @@ export class BarTeamService {
       const id = ulid();
       await client.query(
         `INSERT INTO bar_team_members
-          (id, bar_id, user_id, email, role, status, invited_by_user_id, expires_at)
-         VALUES ($1, $2, NULL, $3, $4, 'pending', $5, CURRENT_TIMESTAMP + ($6 * INTERVAL '1 day'))`,
-        [id, input.barId, email, input.role, input.actorUserId, INVITATION_TTL_DAYS],
+          (id, bar_id, user_id, email, role, status, invited_by_user_id, expires_at, invited_via)
+         VALUES ($1, $2, NULL, $3, $4, 'pending', $5, CURRENT_TIMESTAMP + ($6 * INTERVAL '1 day'), $7)`,
+        [id, input.barId, email, input.role, input.actorUserId, INVITATION_TTL_DAYS,
+         input.publicId !== undefined ? "public_id" : "email"],
       );
       await client.query(
         `INSERT INTO bar_team_audit (id, bar_id, actor_user_id, target_email, action, new_role)
