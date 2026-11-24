@@ -129,6 +129,14 @@ async function createServer(): Promise<FastifyInstance> {
 
   // Le risposte 429 usano lo stesso formato del resto delle API ({ success, error, code });
   // ogni altro errore viene rilanciato all'handler predefinito di Fastify, che resta invariato.
+  // Le risposte delle API sono dati personali e cambiano spesso: il client non deve metterle in cache
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (request.url.startsWith("/api/") && !reply.hasHeader("Cache-Control")) {
+      reply.header("Cache-Control", "no-store");
+    }
+    return payload;
+  });
+
   app.setErrorHandler((error: Error & { statusCode?: number; code?: string }, _request, reply) => {
     if (error.statusCode === 429 && error.code === "RATE_LIMITED") {
       return reply.status(429).send({ success: false, error: error.message, code: "RATE_LIMITED" });
