@@ -113,7 +113,28 @@ async function createServer(): Promise<FastifyInstance> {
     },
   });
 
-  await app.register(rateLimit, { global: true, max: 120, timeWindow: "1 minute" });
+  await app.register(rateLimit, {
+    global: true,
+    max: 120,
+    timeWindow: "1 minute",
+    errorResponseBuilder: (_request, context) => {
+      const seconds = Math.max(1, Math.ceil(context.ttl / 1000));
+      const wait = seconds >= 60 ? `${Math.ceil(seconds / 60)} minuti` : `${seconds} secondi`;
+      return Object.assign(new Error(`Troppe richieste. Riprova tra ${wait}.`), {
+        statusCode: context.statusCode,
+        code: "RATE_LIMITED",
+      });
+    },
+  });
+
+  // Le risposte 429 usano lo stesso formato del resto delle API ({ success, error, code });
+  // ogni altro errore viene rilanciato all'handler predefinito di Fastify, che resta invariato.
+  app.setErrorHandler((error: Error & { statusCode?: number; code?: string }, _request, reply) => {
+    if (error.statusCode === 429 && error.code === "RATE_LIMITED") {
+      return reply.status(429).send({ success: false, error: error.message, code: "RATE_LIMITED" });
+    }
+    throw error;
+  });
 
   const strictLimit = (max: number) => ({ config: { rateLimit: { max, timeWindow: "15 minutes" } } });
 
