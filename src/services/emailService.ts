@@ -70,7 +70,9 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#039;");
 }
 
-const EMAIL_ASSET_BASE_URL = (process.env.EMAIL_ASSET_BASE_URL || "https://fidelty.app/email").replace(/\/+$/, "");
+const EMAIL_LOGO_URL =
+  process.env.EMAIL_LOGO_URL ||
+  "https://res.cloudinary.com/dihtlv8ro/image/upload/Fidelty_Label.png";
 const EMAIL_SITE_URL = "https://fidelty.app";
 
 export function renderPlainTextEmail(subject: string, text: string): string {
@@ -100,7 +102,7 @@ export function renderPlainTextEmail(subject: string, text: string): string {
 <tr><td align="center" style="padding:28px 12px;">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;">
 <tr><td bgcolor="#15102A" style="padding:22px 32px 18px;background-color:#15102A;border-radius:8px 8px 0 0;">
-<a href="${EMAIL_SITE_URL}" style="text-decoration:none;"><img src="${escapeHtml(EMAIL_ASSET_BASE_URL)}/logo-white.png" width="150" alt="Fidelty" style="display:block;width:150px;max-width:150px;height:auto;border:0;outline:none;"></a>
+<a href="${EMAIL_SITE_URL}" style="text-decoration:none;"><img src="${escapeHtml(EMAIL_LOGO_URL)}" width="150" alt="Fidelty" style="display:block;width:150px;max-width:150px;height:auto;border:0;outline:none;"></a>
 </td></tr>
 <tr><td style="padding:0;font-size:0;line-height:0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${tierStrip}</tr></table></td></tr>
 <tr><td bgcolor="#FFFFFF" style="padding:36px 32px 36px;background-color:#FFFFFF;border-radius:0 0 8px 8px;">

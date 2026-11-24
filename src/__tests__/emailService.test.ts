@@ -6,7 +6,7 @@ describe("renderPlainTextEmail", () => {
     const html = renderPlainTextEmail("Invito <bar>", "Ciao & benvenuto\n<non markup>");
 
     expect(html).toContain('bgcolor="#15102A"');
-    expect(html).toContain("logo-white.png");
+    expect(html).toContain("Fidelty_Label.png");
     expect(html).toContain("fidelty.app");
     expect(html).toContain("<h1");
     expect(html).toContain("Invito &lt;bar&gt;");
