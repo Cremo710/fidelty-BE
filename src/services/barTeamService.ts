@@ -50,12 +50,15 @@ export class BarTeamService {
       [barId],
     );
     const result = await databaseService.getPool().query(
-      `SELECT tm.id, tm.email, tm.role, tm.status, tm.user_id = $2 AS "isCurrentUser",
+      `SELECT tm.id,
+         CASE WHEN tm.status = 'pending' AND invitee.id IS NOT NULL THEN NULL ELSE tm.email END AS email,
+         tm.role, tm.status, tm.user_id = $2 AS "isCurrentUser",
          tm.expires_at AS "expiresAt",
          tm.created_at AS "createdAt", tm.accepted_at AS "acceptedAt",
-         u.name AS "fullName"
+         COALESCE(u.name, invitee.name) AS "fullName"
        FROM bar_team_members tm
        LEFT JOIN utenti u ON u.id = tm.user_id
+       LEFT JOIN utenti invitee ON tm.user_id IS NULL AND lower(invitee.email) = lower(tm.email)
        WHERE tm.bar_id = $1 AND tm.status IN ('active', 'pending')
        ORDER BY CASE tm.role WHEN 'manager' THEN 0 WHEN 'co_manager' THEN 1 ELSE 2 END, tm.created_at`,
       [barId, currentUserId],
@@ -88,11 +91,12 @@ export class BarTeamService {
     barId: string;
     actorUserId: string;
     actorRole: BarTeamRole;
-    email: string;
+    email?: string;
+    publicId?: string;
     role: "co_manager" | "waiter";
   }) {
-    const email = input.email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    let email = input.email?.trim().toLowerCase() ?? "";
+    if (input.publicId === undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return { status: 400 as const, code: "INVALID_EMAIL" };
     }
     if (!canInviteRole(input.actorRole, input.role)) {
@@ -100,6 +104,14 @@ export class BarTeamService {
         status: 403 as const,
         code: input.actorRole === "waiter" ? "STAFF_MANAGEMENT_FORBIDDEN" : "ROLE_ASSIGNMENT_FORBIDDEN",
       };
+    }
+    if (input.publicId !== undefined) {
+      const userResult = await databaseService.getPool().query<{ email: string }>(
+        "SELECT email FROM utenti WHERE public_id = $1",
+        [input.publicId.trim().toUpperCase()],
+      );
+      if (!userResult.rows[0]) return { status: 404 as const, code: "USER_NOT_FOUND" };
+      email = userResult.rows[0].email.trim().toLowerCase();
     }
 
     const client = await databaseService.getPool().connect();

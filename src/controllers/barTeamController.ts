@@ -18,6 +18,7 @@ function sendServiceError(reply: FastifyReply, result: { status: number; code: s
     SELF_ROLE_CHANGE_FORBIDDEN: "Non puoi modificare il tuo ruolo. Puoi lasciare il team.",
     CO_MANAGER_PROTECTED: "Solo il Manager può gestire un Co-Manager.",
     MANAGER_CANNOT_LEAVE_OR_NOT_MEMBER: "Il Manager non può lasciare l'attività.",
+    USER_NOT_FOUND: "Nessun utente trovato con questo codice Fidelty.",
   };
   return reply.status(result.status).send({
     success: false,
@@ -65,17 +66,20 @@ export class BarTeamController {
   }
 
   async invite(request: FastifyRequest, reply: FastifyReply) {
-    const body = request.body as { email?: unknown; role?: unknown } | undefined;
-    if (typeof body?.email !== "string" || !["co_manager", "waiter"].includes(String(body.role))) {
-      return reply.status(400).send({ success: false, error: "Email e ruolo validi sono obbligatori.", code: "VALIDATION_ERROR" });
+    const body = request.body as { email?: unknown; publicId?: unknown; role?: unknown } | undefined;
+    const email = typeof body?.email === "string" && body.email.trim() ? body.email : undefined;
+    const publicId = typeof body?.publicId === "string" && body.publicId.trim() ? body.publicId : undefined;
+    if (!email === !publicId || !["co_manager", "waiter"].includes(String(body?.role))) {
+      return reply.status(400).send({ success: false, error: "Indica un'email o un codice Fidelty e un ruolo valido.", code: "VALIDATION_ERROR" });
     }
     const userId = request.userId!;
     const result = await barTeamService.createInvitation({
       barId: request.selectedBarId!,
       actorUserId: userId,
       actorRole: request.barRole!,
-      email: body.email,
-      role: body.role as "co_manager" | "waiter",
+      email,
+      publicId,
+      role: body!.role as "co_manager" | "waiter",
     });
     if (result.status !== 201) return sendServiceError(reply, result);
 

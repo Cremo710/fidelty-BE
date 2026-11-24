@@ -133,6 +133,21 @@ describe.skipIf(!testUrl)("integrazione team bar (database di test)", () => {
       barId, actorUserId: managerId, actorRole: "manager", email: waiterEmail, role: "waiter",
     })).code).toBe("TEAM_MEMBER_EXISTS");
 
+    const codeInvitee = await createUser();
+    const codeInviteePublicId = `T${ulid().slice(-7)}`;
+    await databaseService.getPool().query("UPDATE utenti SET public_id = $2 WHERE id = $1", [codeInvitee.id, codeInviteePublicId]);
+    const invitationByCode = await barTeamService.createInvitation({
+      barId, actorUserId: managerId, actorRole: "manager", publicId: ` ${codeInviteePublicId.toLowerCase()} `, role: "waiter",
+    });
+    expect(invitationByCode.status).toBe(201);
+    if (invitationByCode.status !== 201) return;
+    expect(invitationByCode.email).toBe(codeInvitee.email);
+    const pendingByCode = (await barTeamService.listTeam(barId)).find((member) => member.id === invitationByCode.invitation.id);
+    expect(pendingByCode).toMatchObject({ email: null, fullName: "Team test", status: "pending" });
+    expect((await barTeamService.createInvitation({
+      barId, actorUserId: managerId, actorRole: "manager", publicId: "ZZ-NOPE0", role: "waiter",
+    })).code).toBe("USER_NOT_FOUND");
+
     const createdConcurrentInvitations = await Promise.all([
       barTeamService.createInvitation({
         barId, actorUserId: managerId, actorRole: "manager", email: "race@example.test", role: "waiter",
