@@ -39,6 +39,7 @@ jobs:
       # Valori finti, validi solo per i test: non sono i segreti di produzione
       JWT_SECRET: ci-solo-per-i-test-jwt-secret-0123456789
       REFRESH_TOKEN_SECRET: ci-solo-per-i-test-refresh-secret-0123456789
+      OFFER_REDEMPTION_SECRET: ci-solo-per-i-test-offer-secret-0123456789
 
     steps:
       - name: Scarica il codice
@@ -48,9 +49,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
+      # npm ci installa esattamente le versioni di package-lock.json: ogni esecuzione è uguale
       - name: Installa le dipendenze
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Controllo dei tipi (TypeScript)
         run: npx tsc --noEmit
