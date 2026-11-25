@@ -538,7 +538,7 @@ async function createServer(): Promise<FastifyInstance> {
   });
 
   // Manual credit by bar owner (bar admin only)
-  app.post("/api/consumption-requests/manual-credit", { onRequest: [authenticateToken, requireBarPermission("consumptions.manage")] }, async (request, reply) => {
+  app.post("/api/consumption-requests/manual-credit", { onRequest: [authenticateToken, requireBarPermission("points.credit_manual")] }, async (request, reply) => {
     return consumptionRequestController.manualCredit(request, reply);
   });
 

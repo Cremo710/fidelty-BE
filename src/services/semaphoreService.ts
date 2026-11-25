@@ -1,6 +1,7 @@
 import { databaseService } from "./databaseService.js";
 import type { BarConfigDTO } from "../repositories/barConfigRepository.js";
 import { platformConfigRepository, type PlatformConfig } from "../repositories/platformConfigRepository.js";
+import { getBarDailyPoints, getUserDailyPoints } from "../repositories/dailyPointsRepository.js";
 import {
   aggregateStatus,
   checkAnomaly,
@@ -96,29 +97,11 @@ export class SemaphoreService {
     // ── Signal 0: Daily points cap (user + bar) ────────────────────────────
     const pointsPreview = Math.round(input.amount * platform.pointsPerEuro);
 
-    const [userDailyResult, barDailyResult] = await Promise.all([
-      pool.query<{ total: string }>(
-        `SELECT COALESCE(SUM(points_preview), 0) AS total
-         FROM consumption_requests
-         WHERE requester_user_id = $1
-           AND status IN ('approved', 'credited')
-           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'
-           AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'`,
-        [userId],
-      ),
-      pool.query<{ total: string }>(
-        `SELECT COALESCE(SUM(points_preview), 0) AS total
-         FROM consumption_requests
-         WHERE bar_id = $1
-           AND status IN ('approved', 'credited')
-           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'
-           AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'`,
-        [barId],
-      ),
-    ]);
-
-    const userDailyPoints = Number(userDailyResult.rows[0]?.total ?? 0);
-    const barDailyPoints  = Number(barDailyResult.rows[0]?.total ?? 0);
+    // Stesso conteggio usato in approvazione e nell'accredito manuale (dailyPointsRepository):
+    // giorno dell'assegnazione dei punti e punti ricevuti anche come partecipante.
+    // In sequenza: con un client di transazione le query non possono essere parallele.
+    const userDailyPoints = await getUserDailyPoints(pool, userId);
+    const barDailyPoints  = await getBarDailyPoints(pool, barId);
 
     const dailyCap = checkDailyPointsCap(userDailyPoints, barDailyPoints, pointsPreview, platform);
     if (dailyCap) signals.push(dailyCap);

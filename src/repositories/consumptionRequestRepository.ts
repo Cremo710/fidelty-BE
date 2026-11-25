@@ -4,6 +4,7 @@ import { loyaltyCardRepository } from "./loyaltyCardRepository.js";
 import type { SignalFlag } from "../services/semaphoreService.js";
 import { platformConfigRepository } from "./platformConfigRepository.js";
 import { splitPointsEqually } from "../utils/pointsAllocation.js";
+import { DailyPointsCapError, findDailyCapViolation } from "./dailyPointsRepository.js";
 
 const MAX_CORRECTED_AMOUNT_RATIO = 2;
 
@@ -266,6 +267,11 @@ export class ConsumptionRequestRepository {
 
     try {
       await client.query("BEGIN");
+      // Stesso lock per locale di creazione richiesta e accredito manuale, preso PRIMA del
+      // lock di riga (stesso ordine degli altri percorsi, niente deadlock): le approvazioni
+      // concorrenti vedono i totali del giorno aggiornati e non superano il tetto insieme.
+      await client.query("SET LOCAL lock_timeout = '5s'");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption-bar:${input.barId}`]);
 
       const existingResult = await client.query<ConsumptionRequestDTO>(
         `
@@ -311,6 +317,19 @@ export class ConsumptionRequestRepository {
         throw new Error("SELF_APPROVAL_NOT_ALLOWED");
       }
       const allocations = splitPointsEqually(pointsEarned, participantIds);
+
+      // Tetti giornalieri ricontrollati al momento dell'assegnazione: al momento della creazione
+      // la richiesta era solo "gialla" e nel frattempo il cliente o il locale possono aver
+      // ricevuto altri punti (o il barista può aver corretto l'importo al rialzo).
+      const capViolation = await findDailyCapViolation(client, {
+        barId: existing.bar_id,
+        allocations: allocations.map((a) => ({ userId: a.userId, points: a.pointsAllocated })),
+        maxPointsPerUserPerDay: platformConfig.maxPointsPerUserPerDay,
+        maxPointsPerBarPerDay: platformConfig.maxPointsPerBarPerDay,
+      });
+      if (capViolation) {
+        throw new DailyPointsCapError(capViolation);
+      }
 
       for (const [participantOrder, allocation] of allocations.entries()) {
         await client.query(
@@ -359,7 +378,7 @@ export class ConsumptionRequestRepository {
       await client.query("COMMIT");
       return updatedResult.rows[0];
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
       client.release();

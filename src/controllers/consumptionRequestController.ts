@@ -16,11 +16,16 @@ import { isValidItalianVatNumber, validateReceiptOcr } from "../services/receipt
 import { deleteCloudinaryImageByUrl, getSignedCloudinaryUrl, uploadReceiptImage } from "../utils/imageUpload.js";
 import { splitPointsEqually } from "../utils/pointsAllocation.js";
 import { findBarStaffUserIds, isBarStaff } from "../utils/barStaff.js";
+import { DailyPointsCapError, findDailyCapViolation } from "../repositories/dailyPointsRepository.js";
+import { parseManualCreditAmount, parseManualCreditNote } from "../utils/manualCreditInput.js";
 
 const RECEIPT_IMAGE_RETENTION_DAYS = Number(process.env.RECEIPT_IMAGE_RETENTION_DAYS || 90);
 
 const QR_PREFIX = "FIDELTY_BAR:";
 const MANUAL_CREDIT_MAX_AMOUNT = 100; // € per singolo accredito manuale del barista
+// Un accredito identico (stesso cliente, stesso importo) entro questa finestra è un doppio tap
+const MANUAL_CREDIT_DUPLICATE_WINDOW_SECONDS = 60;
+const BAR_BUSY_MESSAGE = "Il locale sta ricevendo molte richieste. Riprova tra qualche secondo.";
 
 const RECEIPT_CODE_RE = /^[0-9A-Za-z]{4}-[0-9A-Za-z]{4}$/;
 
@@ -1183,6 +1188,19 @@ export class ConsumptionRequestController {
         return reply.status(403).send({ success: false, error: "Non puoi elaborare una richiesta da cui ricevi punti", code: errorMessage });
       }
 
+      if (error instanceof DailyPointsCapError) {
+        return reply.status(429).send({
+          success: false,
+          error: error.userMessage,
+          code: error.code,
+          data: { scope: error.violation.scope, remainingPoints: Math.max(0, error.violation.limit - error.violation.alreadyToday) },
+        });
+      }
+
+      if ((error as any)?.code === "55P03") {
+        return reply.status(503).send({ success: false, error: BAR_BUSY_MESSAGE, code: "SERVICE_UNAVAILABLE" });
+      }
+
       console.error("❌ Errore aggiornamento richiesta consumo:", error);
       return reply.status(500).send({ success: false, error: "Errore interno del server", code: "CONSUMPTION_REQUEST_UPDATE_ERROR" });
     }
@@ -1205,15 +1223,24 @@ export class ConsumptionRequestController {
         note?: string;
       } | undefined) || {};
 
-      const { userPublicId, note } = body;
-      const amount = typeof body.amount === "number" ? body.amount : Number.parseFloat(String(body.amount || ""));
+      const { userPublicId } = body;
+      const amount = parseManualCreditAmount(body.amount);
+      const noteResult = parseManualCreditNote(body.note);
 
       if (!userPublicId || typeof userPublicId !== "string") {
         return reply.status(400).send({ success: false, error: "userPublicId obbligatorio", code: "MISSING_USER_PUBLIC_ID" });
       }
-      if (!Number.isFinite(amount) || amount <= 0) {
-        return reply.status(400).send({ success: false, error: "Importo non valido", code: "INVALID_AMOUNT" });
+      if (amount === null) {
+        return reply.status(400).send({
+          success: false,
+          error: "Importo non valido: usa un numero in euro con al massimo due decimali (es. 12,50)",
+          code: "INVALID_AMOUNT",
+        });
       }
+      if (!noteResult.ok) {
+        return reply.status(400).send({ success: false, error: "La nota può contenere al massimo 200 caratteri", code: "INVALID_NOTE" });
+      }
+      const note = noteResult.note;
 
       const targetUser = await userRepository.findByPublicId(userPublicId.trim().toUpperCase());
       if (!targetUser) {
@@ -1240,35 +1267,61 @@ export class ConsumptionRequestController {
         });
       }
       const pointsPreview = Math.round(amount * platformConfig.pointsPerEuro);
+      if (pointsPreview < 1) {
+        // Un importo che vale 0 punti creerebbe solo una riga "credited" vuota
+        return reply.status(400).send({
+          success: false,
+          error: "Importo troppo basso: non corrisponde ad almeno 1 punto",
+          code: "INVALID_AMOUNT",
+        });
+      }
       const signalReason = note ? `Credito manuale del barista: ${note}` : "Credito manuale del barista";
 
       const client = await databaseService.getPool().connect();
       let created: ConsumptionRequestDTO;
       try {
         await client.query("BEGIN");
+        await client.query("SET LOCAL lock_timeout = '5s'");
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption:${targetUser.id}:${bar.id}`]);
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`consumption-bar:${bar.id}`]);
 
-        const dayFilter = `status IN ('approved', 'credited')
-           AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') AT TIME ZONE 'Europe/Rome'
-           AND created_at < (date_trunc('day', NOW() AT TIME ZONE 'Europe/Rome') + INTERVAL '1 day') AT TIME ZONE 'Europe/Rome'`;
-        const [userDaily, barDaily] = await Promise.all([
-          client.query<{ total: string }>(
-            `SELECT COALESCE(SUM(points_preview), 0) AS total FROM consumption_requests WHERE requester_user_id = $1 AND ${dayFilter}`,
-            [targetUser.id],
-          ),
-          client.query<{ total: string }>(
-            `SELECT COALESCE(SUM(points_preview), 0) AS total FROM consumption_requests WHERE bar_id = $1 AND ${dayFilter}`,
-            [bar.id],
-          ),
-        ]);
-        if (Number(userDaily.rows[0]?.total ?? 0) + pointsPreview > platformConfig.maxPointsPerUserPerDay
-          || Number(barDaily.rows[0]?.total ?? 0) + pointsPreview > platformConfig.maxPointsPerBarPerDay) {
+        // Doppio tap: un accredito manuale identico appena registrato viene rifiutato.
+        // Il controllo è dopo i lock, quindi due richieste parallele non passano entrambe.
+        const duplicate = await client.query(
+          `SELECT 1
+           FROM consumption_requests
+           WHERE bar_id = $1
+             AND requester_user_id = $2
+             AND amount = $3
+             AND status = 'credited'
+             AND signal_flags @> '[{"code":"MANUAL_BAR_CREDIT"}]'::jsonb
+             AND created_at > NOW() - make_interval(secs => $4)
+           LIMIT 1`,
+          [bar.id, targetUser.id, amount.toFixed(2), MANUAL_CREDIT_DUPLICATE_WINDOW_SECONDS],
+        );
+        if ((duplicate.rowCount ?? 0) > 0) {
           await client.query("ROLLBACK");
+          return reply.status(409).send({
+            success: false,
+            error: "Accredito identico appena registrato per questo cliente. Se è voluto, riprova tra un minuto.",
+            code: "DUPLICATE_MANUAL_CREDIT",
+          });
+        }
+
+        const capViolation = await findDailyCapViolation(client, {
+          barId: bar.id,
+          allocations: [{ userId: targetUser.id, points: pointsPreview }],
+          maxPointsPerUserPerDay: platformConfig.maxPointsPerUserPerDay,
+          maxPointsPerBarPerDay: platformConfig.maxPointsPerBarPerDay,
+        });
+        if (capViolation) {
+          await client.query("ROLLBACK");
+          const capError = new DailyPointsCapError(capViolation);
           return reply.status(429).send({
             success: false,
-            error: "Tetto giornaliero di punti raggiunto",
-            code: "DAILY_POINTS_CAP_REACHED",
+            error: capError.userMessage,
+            code: capError.code,
+            data: { scope: capViolation.scope, remainingPoints: Math.max(0, capViolation.limit - capViolation.alreadyToday) },
           });
         }
 
@@ -1300,7 +1353,10 @@ export class ConsumptionRequestController {
 
         await client.query("COMMIT");
       } catch (txErr) {
-        await client.query("ROLLBACK");
+        await client.query("ROLLBACK").catch(() => undefined);
+        if ((txErr as any)?.code === "55P03") {
+          return reply.status(503).send({ success: false, error: BAR_BUSY_MESSAGE, code: "SERVICE_UNAVAILABLE" });
+        }
         throw txErr;
       } finally {
         client.release();

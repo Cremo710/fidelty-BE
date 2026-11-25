@@ -28,6 +28,14 @@ describe("bar team role permissions", () => {
     expect(hasBarPermission("waiter", "staff.manage")).toBe(false);
   });
 
+  it("reserves manual point credits to manager and co-manager", () => {
+    expect(hasBarPermission("manager", "points.credit_manual")).toBe(true);
+    expect(hasBarPermission("co_manager", "points.credit_manual")).toBe(true);
+    expect(hasBarPermission("waiter", "points.credit_manual")).toBe(false);
+    // Il cameriere continua ad approvare e rifiutare le richieste dei clienti
+    expect(hasBarPermission("waiter", "consumptions.manage")).toBe(true);
+  });
+
   it("protects the manager and blocks self-promotion and co-manager administration", () => {
     expect(getTeamMutationDenial({
       actorRole: "co_manager",
