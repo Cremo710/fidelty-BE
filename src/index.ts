@@ -6,6 +6,7 @@ import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import { backfillBarCoordinates } from "./utils/geocode.js";
 import { databaseService } from "./services/databaseService.js";
+import { isDbPoolTimeout, sendDbBusy } from "./utils/dbErrors.js";
 import { authController } from "./controllers/authController.js";
 import { socialAuthController } from "./controllers/socialAuthController.js";
 import { loyaltyCardController } from "./controllers/loyaltyCardController.js";
@@ -162,6 +163,10 @@ async function createServer(): Promise<FastifyInstance> {
   app.setErrorHandler((error: Error & { statusCode?: number; code?: string }, _request, reply) => {
     if (error.statusCode === 429 && error.code === "RATE_LIMITED") {
       return reply.status(429).send({ success: false, error: error.message, code: "RATE_LIMITED" });
+    }
+    // Pool del database esaurito o database lento a rispondere: è temporaneo, il client riprova
+    if (isDbPoolTimeout(error)) {
+      return sendDbBusy(reply);
     }
     throw error;
   });

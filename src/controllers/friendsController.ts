@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from "fastify";
 import { databaseService } from "../services/databaseService.js";
 import { userRepository } from "../repositories/userRepository.js";
 import { friendshipRepository } from "../repositories/friendshipRepository.js";
+import { isDbPoolTimeout, sendDbBusy } from "../utils/dbErrors.js";
 
 class FriendsController {
   /**
@@ -68,6 +69,7 @@ class FriendsController {
         },
       });
     } catch (error) {
+      if (isDbPoolTimeout(error)) return sendDbBusy(reply);
       console.error("❌ Errore addFriend:", error);
       return reply.status(500).send({ success: false, error: "Errore interno", code: "FRIENDS_ERROR" });
     }
@@ -181,6 +183,7 @@ class FriendsController {
 
       return reply.status(200).send({ success: true, message: "Richiesta accettata", data: accepted });
     } catch (error) {
+      if (isDbPoolTimeout(error)) return sendDbBusy(reply);
       console.error("❌ Errore acceptRequest:", error);
       return reply.status(500).send({ success: false, error: "Errore interno", code: "FRIENDS_ERROR" });
     }

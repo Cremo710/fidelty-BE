@@ -9,6 +9,8 @@ import {
 import { databaseService } from "../services/databaseService.js";
 import { offerRedemptionTokenService } from "../services/offerRedemptionTokenService.js";
 import { resolveOwnedBarForRequest } from "../utils/ownedBarResolver.js";
+import { isDbPoolTimeout, sendDbBusy } from "../utils/dbErrors.js";
+import type { PoolClient } from "pg";
 import { getTierIndexFromPoints, getTierProgress } from "../utils/loyaltyTiers.js";
 
 const QR_TTL_MS = 10 * 60 * 1000;
@@ -279,7 +281,10 @@ export class OfferRedemptionController {
   }
 
   async validateQr(request: FastifyRequest, reply: FastifyReply) {
-    const client = await databaseService.getPool().connect();
+    // La connessione si prende solo dopo i controlli preliminari: resolveOwnedBarForRequest usa
+    // il pool, e tenere un client mentre se ne chiede un altro può esaurirlo sotto carico.
+    let client: PoolClient | null = null;
+    let inTransaction = false;
 
     try {
       const validatorUserId = request.userId;
@@ -312,14 +317,37 @@ export class OfferRedemptionController {
         return reply.status(403).send({ success: false, error: "Non puoi validare un tuo riscatto", code: "SELF_VALIDATION_NOT_ALLOWED" });
       }
 
-      await client.query("BEGIN");
-      await offerRedemptionRepository.expireStaleRedemptions(client);
+      // Da qui serve la transazione: una sola connessione, rilasciata nel finally
+      const tx = await databaseService.getPool().connect();
+      client = tx;
+      await tx.query("BEGIN");
+      inTransaction = true;
+      await offerRedemptionRepository.expireStaleRedemptions(tx);
 
-      const redemption = await offerRedemptionRepository.findByIdForUpdate(client, payload.redemptionId);
+      const redemption = await offerRedemptionRepository.findByIdForUpdate(tx, payload.redemptionId);
       if (!redemption) {
-        await client.query("ROLLBACK");
+        await tx.query("COMMIT");
+        inTransaction = false;
         return reply.status(404).send({ success: false, error: "Riscatto non trovato", code: "REDEMPTION_NOT_FOUND" });
       }
+
+      // Un rifiuto non tocca punti né riscatti (al massimo marca il riscatto come scaduto):
+      // si conferma con COMMIT, così l'evento di audit e lo stato "expired" restano registrati.
+      // Prima un ROLLBACK cancellava entrambi.
+      const reject = async (
+        reason: string,
+        status: number,
+        body: { error: string; code: string },
+        extra: Record<string, unknown> = {},
+      ) => {
+        await offerRedemptionRepository.logEvent(tx, redemption.id, "validation_rejected", validatorUserId, {
+          reason,
+          ...extra,
+        });
+        await tx.query("COMMIT");
+        inTransaction = false;
+        return reply.status(status).send({ success: false, ...body });
+      };
 
       const payloadMismatch = (
         redemption.bar_id !== payload.barId
@@ -329,64 +357,52 @@ export class OfferRedemptionController {
       );
 
       if (payloadMismatch) {
-        await offerRedemptionRepository.logEvent(client, redemption.id, "validation_rejected", validatorUserId, {
-          reason: "payload_mismatch",
-        });
-        await client.query("ROLLBACK");
-        return reply.status(400).send({ success: false, error: "QR non valido o manomesso", code: "INVALID_QR_TOKEN" });
+        return reject("payload_mismatch", 400, { error: "QR non valido o manomesso", code: "INVALID_QR_TOKEN" });
       }
 
       if (redemption.status === "redeemed") {
-        await offerRedemptionRepository.logEvent(client, redemption.id, "validation_rejected", validatorUserId, {
-          reason: "already_redeemed",
-        });
-        await client.query("ROLLBACK");
-        return reply.status(409).send({ success: false, error: "QR già utilizzato", code: "QR_ALREADY_USED" });
+        return reject("already_redeemed", 409, { error: "QR già utilizzato", code: "QR_ALREADY_USED" });
       }
 
       if (redemption.status === "expired" || new Date(redemption.expires_at).getTime() <= Date.now()) {
         if (redemption.status === "frozen") {
-          await offerRedemptionRepository.markExpired(client, redemption.id);
+          await offerRedemptionRepository.markExpired(tx, redemption.id);
         }
-        await offerRedemptionRepository.logEvent(client, redemption.id, "validation_rejected", validatorUserId, {
-          reason: "expired",
-        });
-        await client.query("ROLLBACK");
-        return reply.status(410).send({ success: false, error: "QR scaduto", code: "QR_EXPIRED" });
+        return reject("expired", 410, { error: "QR scaduto", code: "QR_EXPIRED" });
       }
 
       if (redemption.status !== "frozen") {
-        await offerRedemptionRepository.logEvent(client, redemption.id, "validation_rejected", validatorUserId, {
-          reason: "invalid_status",
-          status: redemption.status,
-        });
-        await client.query("ROLLBACK");
-        return reply.status(409).send({ success: false, error: "Riscatto non validabile", code: "REDEMPTION_NOT_VALIDATABLE" });
+        return reject(
+          "invalid_status",
+          409,
+          { error: "Riscatto non validabile", code: "REDEMPTION_NOT_VALIDATABLE" },
+          { status: redemption.status },
+        );
       }
 
-      const lockedCard = await offerRedemptionRepository.getLockedLoyaltyCard(client, redemption.user_id, redemption.bar_id);
+      const lockedCard = await offerRedemptionRepository.getLockedLoyaltyCard(tx, redemption.user_id, redemption.bar_id);
       if (!lockedCard || lockedCard.points < redemption.points_amount) {
-        await offerRedemptionRepository.logEvent(client, redemption.id, "validation_rejected", validatorUserId, {
-          reason: "insufficient_underlying_points",
+        return reject("insufficient_underlying_points", 409, {
+          error: "Saldo punti incoerente, impossibile validare",
+          code: "LOYALTY_POINTS_INCONSISTENT",
         });
-        await client.query("ROLLBACK");
-        return reply.status(409).send({ success: false, error: "Saldo punti incoerente, impossibile validare", code: "LOYALTY_POINTS_INCONSISTENT" });
       }
 
       const remainingPoints = await offerRedemptionRepository.deductLoyaltyCardPoints(
-        client,
+        tx,
         redemption.user_id,
         redemption.bar_id,
         redemption.points_amount,
       );
 
-      await offerRedemptionRepository.markRedeemed(client, redemption.id, validatorUserId);
-      await offerRedemptionRepository.logEvent(client, redemption.id, "validated", validatorUserId, {
+      await offerRedemptionRepository.markRedeemed(tx, redemption.id, validatorUserId);
+      await offerRedemptionRepository.logEvent(tx, redemption.id, "validated", validatorUserId, {
         pointsRedeemed: redemption.points_amount,
         remainingPoints,
       });
 
-      await client.query("COMMIT");
+      await tx.query("COMMIT");
+      inTransaction = false;
 
       return reply.status(200).send({
         success: true,
@@ -404,11 +420,17 @@ export class OfferRedemptionController {
         },
       });
     } catch (error) {
-      await client.query("ROLLBACK");
+      if (client && inTransaction) {
+        // Un ROLLBACK su connessione rotta non deve nascondere l'errore originale
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+      if (isDbPoolTimeout(error)) {
+        return sendDbBusy(reply);
+      }
       console.error("❌ Errore offerRedemptionController.ts:", error);
       return reply.status(500).send({ success: false, error: "Errore interno del server", code: "VALIDATE_REDEMPTION_ERROR" });
     } finally {
-      client.release();
+      client?.release();
     }
   }
 }

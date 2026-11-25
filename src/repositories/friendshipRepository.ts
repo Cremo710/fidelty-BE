@@ -105,6 +105,7 @@ export class FriendshipRepository {
 
   async acceptRequest(requestId: string, recipientUserId: string): Promise<FriendshipRequestItem | null> {
     const client = await databaseService.getPool().connect();
+    let accepted = false;
 
     try {
       await client.query("BEGIN");
@@ -139,13 +140,18 @@ export class FriendshipRepository {
       );
 
       await client.query("COMMIT");
-      return this.getRequestById(requestId);
+      accepted = true;
     } catch (error) {
-      await client.query("ROLLBACK");
+      // Un ROLLBACK su connessione rotta non deve nascondere l'errore originale
+      await client.query("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
       client.release();
     }
+
+    // Letta dopo il rilascio del client: getRequestById usa il pool, e chiederne una seconda
+    // connessione mentre si tiene la prima può esaurirlo sotto carico
+    return accepted ? this.getRequestById(requestId) : null;
   }
 
   async rejectRequest(requestId: string, recipientUserId: string): Promise<FriendshipRequestItem | null> {
