@@ -10,6 +10,7 @@ Genera ogni segreto con: `node -e "console.log(require('crypto').randomBytes(48)
 - [ ] `JWT_SECRET`, `REFRESH_TOKEN_SECRET`, `OFFER_REDEMPTION_SECRET`: tre valori diversi, ≥ 32 caratteri
 - [ ] `ADMIN_USER_IDS`
 - [ ] `CORS_ALLOWED_ORIGINS` (dominio del sito)
+- [ ] `TRUST_PROXY_HOPS=3`: i proxy di Render davanti al server (misurati il 25/11/2026). Senza, tutti gli utenti condividono i limiti per IP e all'avvio compare l'avviso `trust_proxy_hops_missing`
 - [ ] `GOOGLE_CREDENTIALS` (Vision), `GOOGLE_GEOCODE_API_KEY` e `GOOGLE_PLACES_API_KEY` (**nuove**, con restrizione per API, tetto giornaliero e avviso di budget)
 - [ ] `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
 - [ ] Email: `EMAIL_PROVIDER`, `RESEND_API_KEY` e/o `SMTP_*`, mittente su dominio verificato (non `onboarding@resend.dev`)

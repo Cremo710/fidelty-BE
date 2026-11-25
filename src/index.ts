@@ -67,8 +67,12 @@ function getAllowedCorsOrigins(): RegExp[] {
  * Numero di proxy fidati davanti al server (Render). Con `trustProxy: true` Fastify prende come
  * IP del client il primo valore di X-Forwarded-For, che il client può scrivere a piacere:
  * ogni limite per IP diventa aggirabile. Con un numero N si considerano fidati solo gli ultimi N hop.
- * Default 1 (il load balancer di Render); da confermare con il log `xff_hops` all'avvio.
+ * Su Render sono 3 (misurati il 25/11/2026 dai log): va impostato TRUST_PROXY_HOPS=3 (vedi
+ * docs/DEPLOY_CHECKLIST.md). Il default 1 vale per l'ambiente locale; in produzione, senza la
+ * variabile, tutti gli utenti risulterebbero con l'IP di un proxy di Render e condividerebbero
+ * i limiti per IP: per questo all'avvio viene scritto un avviso nei log.
  */
+const TRUST_PROXY_HOPS_CONFIGURED = Boolean(process.env.TRUST_PROXY_HOPS?.trim());
 const TRUST_PROXY_HOPS = (() => {
   const parsed = Number.parseInt(process.env.TRUST_PROXY_HOPS || "", 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 1;
@@ -99,6 +103,13 @@ async function createServer(): Promise<FastifyInstance> {
     },
     disableRequestLogging: CONFIG.nodeEnv === "production",
   });
+
+  if (CONFIG.nodeEnv === "production" && !TRUST_PROXY_HOPS_CONFIGURED) {
+    app.log.warn(
+      { event: "trust_proxy_hops_missing", trustProxyHops: getTrustProxyHops() },
+      "TRUST_PROXY_HOPS non impostata: su Render va impostata a 3, altrimenti i limiti per IP sono condivisi tra gli utenti",
+    );
+  }
 
   app.log.info({
     event: "social_auth_config",
@@ -137,17 +148,6 @@ async function createServer(): Promise<FastifyInstance> {
     max: 120,
     timeWindow: "1 minute",
     errorResponseBuilder: (_request, context) => buildRateLimitedError(context.ttl, context.statusCode),
-  });
-
-  // Diagnostica per calibrare TRUST_PROXY_HOPS: registra solo il numero di hop di X-Forwarded-For
-  // (mai gli indirizzi) per le prime richieste dopo l'avvio.
-  let xffSamples = 0;
-  app.addHook("onRequest", async (request) => {
-    if (xffSamples >= 5) return;
-    xffSamples++;
-    const xff = request.headers["x-forwarded-for"];
-    const hops = typeof xff === "string" ? xff.split(",").filter((v) => v.trim()).length : 0;
-    request.log.info({ event: "xff_hops", hops, trustProxyHops: getTrustProxyHops() });
   });
 
   // Le risposte 429 usano lo stesso formato del resto delle API ({ success, error, code });
