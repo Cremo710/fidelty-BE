@@ -1,0 +1,59 @@
+# CI del backend: a ogni push su develop (e a ogni pull request) GitHub avvia una macchina
+# pulita, installa le dipendenze, controlla i tipi TypeScript e lancia tutti i test,
+# compresi quelli di integrazione su un vero Postgres 16 creato solo per questa esecuzione.
+# Se qualcosa fallisce, il commit compare con una ❌ su GitHub e arriva una email.
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+
+jobs:
+  test:
+    name: Tipi e test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      # Database usa e getta: esiste solo durante questa esecuzione, nessun dato reale
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fidelty_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Il nome contiene "test": i test di integrazione rifiutano qualsiasi altro database
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/fidelty_test
+      # Il Postgres della CI non ha certificato; in produzione questa opzione è vietata
+      DATABASE_SSL: disable
+      # Valori finti, validi solo per i test: non sono i segreti di produzione
+      JWT_SECRET: ci-solo-per-i-test-jwt-secret-0123456789
+      REFRESH_TOKEN_SECRET: ci-solo-per-i-test-refresh-secret-0123456789
+
+    steps:
+      - name: Scarica il codice
+        uses: actions/checkout@v4
+
+      - name: Installa Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Installa le dipendenze
+        run: npm install --no-audit --no-fund
+
+      - name: Controllo dei tipi (TypeScript)
+        run: npx tsc --noEmit
+
+      - name: Test unitari e di integrazione (Postgres)
+        run: npm test

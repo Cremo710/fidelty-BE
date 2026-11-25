@@ -16,9 +16,16 @@ export class DatabaseService {
       );
     }
 
+    // DATABASE_SSL=disable serve solo al Postgres locale della CI (senza certificato).
+    // In produzione è vietato: la connessione a Neon deve restare cifrata e verificata.
+    const sslDisabled = process.env.DATABASE_SSL === "disable";
+    if (sslDisabled && process.env.NODE_ENV === "production") {
+      throw new Error("DATABASE_SSL=disable non è ammesso con NODE_ENV=production");
+    }
+
     this.pool = new Pool({
       connectionString: databaseUrl,
-      ssl: {
+      ssl: sslDisabled ? false : {
         rejectUnauthorized: true,
       },
       max: 10,

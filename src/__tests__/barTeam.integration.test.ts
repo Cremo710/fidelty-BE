@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { ulid } from "ulid";
+import { BAR_ROLE_PERMISSIONS } from "../utils/barPermissions.js";
 
 const testUrl = process.env.TEST_DATABASE_URL;
 
@@ -190,18 +191,16 @@ describe.skipIf(!testUrl)("integrazione team bar (database di test)", () => {
 
     expect((await barTeamService.acceptInvitation(invitation.invitation.id, waiterId, waiterEmail)).status).toBe(200);
     const waiterAccess = await barTeamService.getAccess(waiterId, barId);
-    expect(waiterAccess?.permissions).toEqual(["offers.validate", "consumptions.manage"]);
-    for (const permission of [
-      "offers.validate", "consumptions.manage", "offers.edit", "business.edit", "stats.view", "staff.manage",
-    ] as const) {
+    // Attese derivate dalla matrice dei permessi: il test resta allineato quando cambia
+    const allPermissions = BAR_ROLE_PERMISSIONS.manager;
+    expect(waiterAccess?.permissions).toEqual([...BAR_ROLE_PERMISSIONS.waiter]);
+    for (const permission of allPermissions) {
       expect(await permissionGuard(waiterId, barId, permission)).toBe(
-        permission === "offers.validate" || permission === "consumptions.manage" ? 200 : 403,
+        BAR_ROLE_PERMISSIONS.waiter.includes(permission) ? 200 : 403,
       );
     }
     expect(await permissionGuard(waiterId, otherBarId, "consumptions.manage")).toBe(404);
-    for (const permission of [
-      "offers.validate", "consumptions.manage", "offers.edit", "business.edit", "stats.view", "staff.manage",
-    ] as const) {
+    for (const permission of allPermissions) {
       expect(await permissionGuard(managerId, barId, permission)).toBe(200);
     }
 
@@ -211,11 +210,12 @@ describe.skipIf(!testUrl)("integrazione team bar (database di test)", () => {
     expect((await barTeamService.updateMember({
       barId, memberId: activeWaiter.id, actorUserId: managerId, actorRole: "manager", role: "co_manager",
     })).status).toBe(200);
-    expect((await barTeamService.getAccess(waiterId, barId))?.permissions).toHaveLength(6);
-    for (const permission of [
-      "offers.validate", "consumptions.manage", "offers.edit", "business.edit", "stats.view", "staff.manage",
-    ] as const) {
-      expect(await permissionGuard(waiterId, barId, permission)).toBe(200);
+    expect((await barTeamService.getAccess(waiterId, barId))?.permissions).toEqual([...BAR_ROLE_PERMISSIONS.co_manager]);
+    for (const permission of allPermissions) {
+      // Il co-manager non può eliminare il bar né cambiare l'antifrode (business.delete, fraud.config)
+      expect(await permissionGuard(waiterId, barId, permission)).toBe(
+        BAR_ROLE_PERMISSIONS.co_manager.includes(permission) ? 200 : 403,
+      );
     }
 
     const secondCoManagerEmail = `co-${ulid().toLowerCase()}@example.test`;
