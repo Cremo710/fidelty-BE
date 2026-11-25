@@ -12,6 +12,7 @@ import { z } from "zod";
 import { createOfferSchema } from "../validators/offerValidator.js";
 import { setOpeningHoursSchema } from "../validators/openingHoursValidator.js";
 import { isValidItalianVat } from "../utils/vat.js";
+import { normalizeLink, type SocialPlatform } from "../utils/links.js";
 
 interface GoogleGeocodeResponse {
   status: string;
@@ -137,12 +138,21 @@ export class BusinessRequestController {
       return null;
     }
 
-    const urlFields: Array<[string, string]> = [["website", "Sito web"], ["instagram", "Instagram"], ["facebook", "Facebook"], ["tiktok", "TikTok"]];
-    for (const [field, label] of urlFields) {
-      if (data[field] && !/^https?:\/\/\S+$/i.test(data[field])) {
-        await reply.status(400).send({ success: false, error: `${label}: il link deve iniziare con http:// o https://` });
+    // Stesse regole del profilo bar: "www.miobar.it" e "@miobar" vengono completati
+    const urlFields: Array<[string, string, SocialPlatform | undefined]> = [
+      ["website", "Sito web", undefined],
+      ["instagram", "Instagram", "instagram"],
+      ["facebook", "Facebook", "facebook"],
+      ["tiktok", "TikTok", "tiktok"],
+    ];
+    for (const [field, label, platform] of urlFields) {
+      if (!data[field]) continue;
+      const normalized = normalizeLink(data[field], platform);
+      if (typeof normalized !== "string" || !/^https?:\/\/[^\s/?#]+\.[^\s/?#]+\S*$/i.test(normalized)) {
+        await reply.status(400).send({ success: false, error: `${label}: inserisci un link valido, ad esempio https://www.miobar.it` });
         return null;
       }
+      data[field] = normalized;
     }
 
     let offers: unknown[] = [];

@@ -369,7 +369,8 @@ export class BarController {
       if (!validation.success) {
         return reply.status(400).send({
           success: false,
-          error: "Dati di input non validi",
+          // Il primo messaggio contiene già il nome del campo da correggere (es. "Sito web: ...")
+          error: validation.errors?.[0]?.message ?? "Dati di input non validi",
           code: "VALIDATION_ERROR",
           details: validation.errors,
         });

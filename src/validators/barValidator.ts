@@ -1,18 +1,21 @@
 import { z } from "zod";
 import { isValidItalianVat } from "../utils/vat.js";
+import { normalizeLink, type SocialPlatform } from "../utils/links.js";
 
 // Stringa vuota -> null per i campi opzionali
 const emptyToNull = (value: unknown) =>
   typeof value === "string" && value.trim() === "" ? null : value;
 
-const optionalHttpUrl =  (max: number, label: string) =>
+// Link inseriti a mano: "www.miobar.it" e "@miobar" vengono completati (vedi utils/links.ts),
+// poi si controlla che sia un indirizzo web con un dominio, senza spazi.
+const optionalHttpUrl =  (max: number, label: string, platform?: SocialPlatform) =>
   z.preprocess(
-    emptyToNull,
+    (value) => normalizeLink(value, platform),
     z
       .string()
       .trim()
       .max(max, `${label} non può superare ${max} caratteri`)
-      .regex(/^https?:\/\/\S+$/i, `${label} deve iniziare con http:// o https://`)
+      .regex(/^https?:\/\/[^\s/?#]+\.[^\s/?#]+\S*$/i, `${label}: inserisci un link valido, ad esempio https://www.miobar.it`)
       .nullable()
       .optional(),
   );
@@ -37,9 +40,9 @@ const contactFields = {
       .nullable()
       .optional(),
   ),
-  instagram: optionalHttpUrl(255, "Instagram"),
-  facebook: optionalHttpUrl(255, "Facebook"),
-  tiktok: optionalHttpUrl(255, "TikTok"),
+  instagram: optionalHttpUrl(255, "Instagram", "instagram"),
+  facebook: optionalHttpUrl(255, "Facebook", "facebook"),
+  tiktok: optionalHttpUrl(255, "TikTok", "tiktok"),
   website: optionalHttpUrl(500, "Sito web"),
 };
 
