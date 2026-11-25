@@ -344,47 +344,20 @@ export class BusinessRequestController {
         return reply.status(400).send({ success: false, error: "Email non valida", code: "VALIDATION_ERROR" });
       }
 
-      // 3. Risolvi l'utente
-      let userId: string;
-      let accountCreated = false;
-      let accountAlreadyExists = false;
-      let verificationEmailSent = false;
-
+      // 3. Un'email già registrata non passa da qui. Prima questo ramo verificava la password
+      //    (401 o 201 a seconda che fosse giusta): un endpoint pubblico usabile per provare
+      //    password senza limiti per account. Il titolare entra nell'app e invia la richiesta da lì
+      //    (POST /api/business-requests, autenticato).
       const exists = await userRepository.emailExists(accountEmail);
-      if (!exists) {
-        const authService = getAuthService();
-        const hashed = await authService.hashPassword(accountPassword);
-        userId = await userRepository.createUser({ name: accountName, email: accountEmail, password: hashed });
-        try {
-          const dispatch = await issueEmailVerification({ id: userId, email: accountEmail, name: accountName });
-          verificationEmailSent = dispatch.sent ?? true;
-        } catch (emailErr) {
-          console.warn("⚠️ Email di verifica non inviata:", emailErr);
-        }
-        accountCreated = true;
-      } else {
-        // Account esistente: richiede la password corretta (anti-takeover)
-        const existing = await userRepository.findByEmail(accountEmail);
-        const passwordOk = existing
-          && await getAuthService().verifyPassword(accountPassword, existing.password);
-        if (!existing || !passwordOk) {
-          return reply.status(401).send({
-            success: false,
-            error: "Esiste già un account con questa email. Inserisci la password corretta.",
-            code: "INVALID_CREDENTIALS",
-          });
-        }
-        userId = existing.id;
-        accountAlreadyExists = true;
+      if (exists) {
+        return reply.status(409).send({
+          success: false,
+          error: "Esiste già un account Fidelty con questa email. Accedi all'app e invia la richiesta per il tuo locale dalla sezione dedicata.",
+          code: "ACCOUNT_EXISTS_USE_APP",
+        });
       }
 
-      // 4. Guard duplicati
-      const hasPending = await businessRequestRepository.hasPendingRequest(userId);
-      if (hasPending) {
-        return reply.status(400).send({ success: false, error: "Esiste già una richiesta in attesa per questo account", code: "REQUEST_PENDING" });
-      }
-
-      // 5. Pre-check P.IVA (l'approvazione lo ricontrolla comunque)
+      // 4. Pre-check P.IVA prima di creare l'account (l'approvazione lo ricontrolla comunque)
       if (data.vatNumber) {
         const pivaExists = await barRepository.findByPiva(data.vatNumber.replace(/\s/g, ""));
         if (pivaExists) {
@@ -392,16 +365,52 @@ export class BusinessRequestController {
         }
       }
 
-      // 6. Crea la business request
-      const businessRequest = await this.persistBusinessRequest(reply, data, files, userId);
-      if (!businessRequest) return;
+      // 5. Crea l'account e la richiesta. Se un passo fallisce si cancella l'account
+      //    (business_requests ha ON DELETE CASCADE): niente account orfani né mai verificabili,
+      //    che bloccherebbero l'email del titolare. Stesso comportamento di /register.
+      const hashed = await getAuthService().hashPassword(accountPassword);
+      const userId = await userRepository.createUser({ name: accountName, email: accountEmail, password: hashed });
+      const rollbackAccount = async (reason: string, err?: unknown) => {
+        console.error(`❌ createFromSite: ${reason}, rollback account ${userId}`, err ?? "");
+        await userRepository.deleteUser(userId).catch((deleteErr) => {
+          console.error("❌ createFromSite: rollback account non riuscito:", deleteErr);
+        });
+      };
 
-      // 7. Risposta
+      let businessRequest;
+      try {
+        businessRequest = await this.persistBusinessRequest(reply, data, files, userId);
+      } catch (persistErr) {
+        await rollbackAccount("creazione richiesta fallita", persistErr);
+        throw persistErr;
+      }
+      if (!businessRequest) {
+        // persistBusinessRequest ha già risposto con l'errore di validazione
+        await rollbackAccount("richiesta non valida");
+        return;
+      }
+
+      // 6. Email di verifica per ultima: errore d'invio → rollback di account e richiesta.
+      //    `sent: false` (servizio email non configurato, es. in sviluppo) viene solo segnalato.
+      let verificationEmailSent: boolean;
+      try {
+        const dispatch = await issueEmailVerification({ id: userId, email: accountEmail, name: accountName });
+        verificationEmailSent = dispatch.sent;
+      } catch (emailErr) {
+        await rollbackAccount("invio email di verifica fallito", emailErr);
+        return reply.status(502).send({
+          success: false,
+          error: "Impossibile inviare l'email di verifica. Riprova tra qualche minuto.",
+          code: "EMAIL_VERIFICATION_SEND_FAILED",
+        });
+      }
+
+      // 7. Risposta (campi invariati per compatibilità con il sito)
       return reply.status(201).send({
         success: true,
         data: businessRequest,
-        accountCreated,
-        accountAlreadyExists,
+        accountCreated: true,
+        accountAlreadyExists: false,
         verificationEmailSent,
       });
     } catch (error: any) {

@@ -26,6 +26,7 @@ import { geoController } from "./controllers/geoController.js";
 import { barTeamController } from "./controllers/barTeamController.js";
 import { requireBarPermission } from "./utils/barPermissionGuard.js";
 import { getSocialAuthPublicConfig } from "./services/socialAuthService.js";
+import { bodyEmail, buildRateLimitedError, createAuthLimitGuard, isAuthFailure } from "./utils/authRateLimit.js";
 import pg from "pg";
 
 const { Client } = pg;
@@ -61,10 +62,27 @@ function getAllowedCorsOrigins(): RegExp[] {
   ];
 }
 
+/**
+ * Numero di proxy fidati davanti al server (Render). Con `trustProxy: true` Fastify prende come
+ * IP del client il primo valore di X-Forwarded-For, che il client può scrivere a piacere:
+ * ogni limite per IP diventa aggirabile. Con un numero N si considerano fidati solo gli ultimi N hop.
+ * Default 1 (il load balancer di Render); da confermare con il log `xff_hops` all'avvio.
+ */
+const TRUST_PROXY_HOPS = (() => {
+  const parsed = Number.parseInt(process.env.TRUST_PROXY_HOPS || "", 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 1;
+})();
+function getTrustProxyHops(): number {
+  return TRUST_PROXY_HOPS;
+}
+
 // Create Fastify server
 async function createServer(): Promise<FastifyInstance> {
   const app = Fastify({
-    trustProxy: true,
+    // Funzione e non numero: questa versione di Fastify tratta `trustProxy: <numero>` come
+    // "nessun proxy fidato" e request.ip sarebbe sempre l'IP del load balancer, uguale per tutti.
+    // hop 0 = indirizzo del socket (il proxy di Render), hop 1 = penultimo valore di X-Forwarded-For…
+    trustProxy: (_address: string, hop: number) => hop < getTrustProxyHops(),
     logger: {
       level: "info",
       // Formattazione di base per lo sviluppo
@@ -117,14 +135,18 @@ async function createServer(): Promise<FastifyInstance> {
     global: true,
     max: 120,
     timeWindow: "1 minute",
-    errorResponseBuilder: (_request, context) => {
-      const seconds = Math.max(1, Math.ceil(context.ttl / 1000));
-      const wait = seconds >= 60 ? `${Math.ceil(seconds / 60)} minuti` : `${seconds} secondi`;
-      return Object.assign(new Error(`Troppe richieste. Riprova tra ${wait}.`), {
-        statusCode: context.statusCode,
-        code: "RATE_LIMITED",
-      });
-    },
+    errorResponseBuilder: (_request, context) => buildRateLimitedError(context.ttl, context.statusCode),
+  });
+
+  // Diagnostica per calibrare TRUST_PROXY_HOPS: registra solo il numero di hop di X-Forwarded-For
+  // (mai gli indirizzi) per le prime richieste dopo l'avvio.
+  let xffSamples = 0;
+  app.addHook("onRequest", async (request) => {
+    if (xffSamples >= 5) return;
+    xffSamples++;
+    const xff = request.headers["x-forwarded-for"];
+    const hops = typeof xff === "string" ? xff.split(",").filter((v) => v.trim()).length : 0;
+    request.log.info({ event: "xff_hops", hops, trustProxyHops: getTrustProxyHops() });
   });
 
   // Le risposte 429 usano lo stesso formato del resto delle API ({ success, error, code });
@@ -146,17 +168,45 @@ async function createServer(): Promise<FastifyInstance> {
 
   const strictLimit = (max: number) => ({ config: { rateLimit: { max, timeWindow: "15 minutes" } } });
 
-  // Chiavi di rate limit che non si aggirano cambiando X-Forwarded-For:
-  // l'email del body (rotte di login/verifica/reset) o l'utente autenticato.
-  const emailRateKey = (request: FastifyRequest) => {
-    const email = (request.body as { email?: unknown } | undefined)?.email;
-    return typeof email === "string" && email.trim() ? `email:${email.trim().toLowerCase()}` : `ip:${request.ip}`;
-  };
+  // Chiave di rate limit per utente autenticato (non si aggira cambiando IP)
   const userRateKey = (request: FastifyRequest) => (request.userId ? `user:${request.userId}` : `ip:${request.ip}`);
-  // preHandler: il body è già letto, quindi l'email è disponibile
-  const strictLimitByEmail = (max: number) => ({
-    config: { rateLimit: { max, timeWindow: "15 minutes", hook: "preHandler" as const, keyGenerator: emailRateKey } },
-  });
+
+  // Limiti delle rotte di autenticazione (vedi utils/authRateLimit.ts). Tre livelli:
+  // - per IP: ferma chi prova una password comune su molte email (password spraying);
+  // - per email+IP: ferma il brute force su un account, ma un attaccante da un altro IP
+  //   non blocca più il login della vittima;
+  // - per email (soglia più alta, finestra più lunga): ferma il brute force distribuito su più IP.
+  // I limiti su login e codici contano solo i tentativi falliti (400/401).
+  const emailKey = (request: FastifyRequest) => bodyEmail(request);
+  const emailIpKey = (request: FastifyRequest) => {
+    const email = bodyEmail(request);
+    return email ? `${email}|${request.ip}` : null;
+  };
+  const ipKey = (request: FastifyRequest) => request.ip;
+
+  const loginGuard = createAuthLimitGuard(app, [
+    { name: "login-ip", max: 20, timeWindow: "15 minutes", key: ipKey, countWhen: isAuthFailure },
+    { name: "login-email-ip", max: 5, timeWindow: "15 minutes", key: emailIpKey, countWhen: isAuthFailure },
+    { name: "login-email", max: 20, timeWindow: "1 hour", key: emailKey, countWhen: isAuthFailure },
+  ]);
+  const verifyEmailGuard = createAuthLimitGuard(app, [
+    { name: "verify-ip", max: 20, timeWindow: "15 minutes", key: ipKey, countWhen: isAuthFailure },
+    { name: "verify-email-ip", max: 10, timeWindow: "15 minutes", key: emailIpKey, countWhen: isAuthFailure },
+    { name: "verify-email", max: 30, timeWindow: "1 hour", key: emailKey, countWhen: isAuthFailure },
+  ]);
+  // Rotte che inviano un'email: si conta ogni richiesta (anti email-bombing)
+  const emailSendGuard = (name: string) => createAuthLimitGuard(app, [
+    { name: `${name}-ip`, max: 20, timeWindow: "15 minutes", key: ipKey },
+    { name: `${name}-email-ip`, max: 5, timeWindow: "15 minutes", key: emailIpKey },
+    { name: `${name}-email`, max: 10, timeWindow: "1 hour", key: emailKey },
+  ]);
+  const resendVerificationGuard = emailSendGuard("resend-verification");
+  const passwordResetGuard = emailSendGuard("password-reset");
+  const registerGuard = createAuthLimitGuard(app, [
+    { name: "register-ip", max: 10, timeWindow: "15 minutes", key: ipKey },
+    { name: "register-email-ip", max: 5, timeWindow: "15 minutes", key: emailIpKey },
+    { name: "register-email", max: 10, timeWindow: "1 hour", key: emailKey },
+  ]);
 
   // Root endpoint
   app.get("/", async () => ({
@@ -171,12 +221,13 @@ async function createServer(): Promise<FastifyInstance> {
   // ==================== AUTH ENDPOINTS ====================
 
   // User registration endpoint
-  app.post("/api/auth/register", strictLimit(10), async (request, reply) => {
+  // La registrazione invia sempre un'email (codice o avviso "account già esistente"): limite anche per email
+  app.post("/api/auth/register", registerGuard, async (request, reply) => {
     return authController.register(request, reply);
   });
 
   // User login endpoint
-  app.post("/api/auth/login", strictLimitByEmail(5), async (request, reply) => {
+  app.post("/api/auth/login", loginGuard, async (request, reply) => {
     return authController.login(request, reply);
   });
 
@@ -184,15 +235,15 @@ async function createServer(): Promise<FastifyInstance> {
     return socialAuthController.login(request, reply);
   });
 
-  app.post("/api/auth/verify-email/resend", strictLimitByEmail(5), async (request, reply) => {
+  app.post("/api/auth/verify-email/resend", resendVerificationGuard, async (request, reply) => {
     return authController.resendEmailVerification(request, reply);
   });
 
-  app.post("/api/auth/verify-email/confirm", strictLimitByEmail(10), async (request, reply) => {
+  app.post("/api/auth/verify-email/confirm", verifyEmailGuard, async (request, reply) => {
     return authController.verifyEmail(request, reply);
   });
 
-  app.post("/api/auth/password-reset/request", strictLimitByEmail(5), async (request, reply) => {
+  app.post("/api/auth/password-reset/request", passwordResetGuard, async (request, reply) => {
     return authController.requestPasswordReset(request, reply);
   });
 

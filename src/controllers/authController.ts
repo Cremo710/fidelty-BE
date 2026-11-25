@@ -48,6 +48,16 @@ function hashRawToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// Hash argon2 di una password casuale, calcolato una volta sola e usato per le verifiche fittizie
+let dummyPasswordHashPromise: Promise<string> | null = null;
+function getDummyPasswordHash(): Promise<string> {
+  if (!dummyPasswordHashPromise) {
+    dummyPasswordHashPromise = getAuthService().hashPassword(randomBytes(32).toString("hex"));
+    dummyPasswordHashPromise.catch(() => { dummyPasswordHashPromise = null; });
+  }
+  return dummyPasswordHashPromise;
+}
+
 /**
  * Emette un'email di verifica per l'utente specificato.
  * Funzione pubblica riutilizzabile da altri controller.
@@ -111,19 +121,65 @@ export class AuthController {
 
       const input = validation.data as RegisterInput;
 
-      // Verifica se l'email è già registrata
-      const existingUser = await userRepository.findByEmail(input.email);
-      if (existingUser) {
-        return reply.status(409).send({
-          success: false,
-          error: "Email già registrata",
-          code: "EMAIL_EXISTS",
-        });
-      }
-
-      // Hash della password usando argon2
+      // Hash sempre calcolato, anche per un'email esistente: tempi di risposta uniformi
       const authService = getAuthService();
       const hashedPassword = await authService.hashPassword(input.password);
+
+      // La risposta è identica per email nuova, esistente non verificata ed esistente verificata,
+      // così la registrazione non rivela chi ha già un account.
+      const genericCreated = (verificationEmailSent: boolean) => reply.status(201).send({
+        success: true,
+        message: "Utente registrato. Verifica la tua email per completare l'accesso",
+        data: {
+          email: input.email,
+          name: input.name,
+          requiresEmailVerification: true,
+          verificationEmailSent,
+        },
+      });
+
+      const existingUser = await userRepository.findByEmail(input.email);
+
+      if (existingUser?.is_email_verified) {
+        // Account già attivo: nessuna modifica. Il titolare riceve un avviso al posto del codice.
+        try {
+          await emailService.sendPlainTextEmail({
+            recipientEmail: existingUser.email,
+            subject: "Hai già un account Fidelty",
+            text: [
+              `Ciao ${existingUser.name || ""},`,
+              "",
+              "qualcuno (forse tu) ha provato a registrarsi su Fidelty con questa email, ma un account esiste già.",
+              "Puoi accedere con la tua password oppure, se non la ricordi, usare \"Password dimenticata\" nell'app.",
+              "",
+              "Se non sei stato tu, puoi ignorare questa email: il tuo account non è stato modificato.",
+            ].join("\n"),
+          });
+        } catch (noticeError) {
+          console.error("❌ Invio avviso 'account già esistente' fallito:", noticeError);
+        }
+        return genericCreated(true);
+      }
+
+      if (existingUser) {
+        // Account mai verificato (pre-hijacking): chi conferma il codice ricevuto via email
+        // deve attivare la password scelta da lui, non quella di chi ha registrato l'email per primo.
+        // Si sostituiscono nome e password e si invia un nuovo codice (i precedenti vengono invalidati).
+        await userRepository.updateUser(existingUser.id, { name: input.name, password: hashedPassword });
+        await userRepository.revokeAllUserTokens(existingUser.id);
+        let dispatch;
+        try {
+          dispatch = await this.issueEmailVerification({ id: existingUser.id, email: existingUser.email, name: input.name });
+        } catch (emailError) {
+          console.error("❌ Invio email di verifica fallito (account non verificato):", emailError);
+          return reply.status(502).send({
+            success: false,
+            error: "Impossibile inviare l'email di verifica. Riprova la registrazione.",
+            code: "EMAIL_VERIFICATION_SEND_FAILED",
+          });
+        }
+        return genericCreated(dispatch.sent);
+      }
 
       // Salva l'utente nel database
       const userId = await userRepository.createUser({
@@ -131,7 +187,6 @@ export class AuthController {
         email: input.email,
         password: hashedPassword,
       });
-      const createdUser = await userRepository.findById(userId);
 
       let verificationDispatch;
       try {
@@ -154,26 +209,16 @@ export class AuthController {
         });
       }
 
-      console.log(`✅ Utente registrato con successo: ${input.email}`);
+      console.log(`✅ Utente registrato con successo: ${userId}`);
 
-      return reply.status(201).send({
-        success: true,
-        message: "Utente registrato. Verifica la tua email per completare l'accesso",
-        data: {
-          id: userId,
-          email: input.email,
-          name: input.name,
-          publicId: createdUser?.public_id ?? null,
-          requiresEmailVerification: true,
-          verificationEmailSent: verificationDispatch.sent,
-        },
-      });
+      return genericCreated(verificationDispatch.sent);
     } catch (error) {
       if (error instanceof EmailExistsError) {
-        return reply.status(409).send({
-          success: false,
-          error: "Email già registrata",
-          code: "EMAIL_EXISTS",
+        // Registrazione concorrente sulla stessa email: stessa risposta degli altri casi
+        return reply.status(201).send({
+          success: true,
+          message: "Utente registrato. Verifica la tua email per completare l'accesso",
+          data: { requiresEmailVerification: true, verificationEmailSent: true },
         });
       }
 
@@ -214,7 +259,10 @@ export class AuthController {
       // Recupera l'utente dal database
       const user = await userRepository.findByEmail(input.email);
       if (!user) {
-        console.log(`⚠️  Tentativo di login con email inesistente: ${input.email}`);
+        // Verifica argon2 fittizia: senza, un'email inesistente risponde molto prima di una
+        // esistente e i tempi rivelerebbero chi è registrato
+        await getAuthService().verifyPassword(input.password, await getDummyPasswordHash());
+        console.log("⚠️  Tentativo di login con email inesistente");
         return reply.status(401).send({
           success: false,
           error: "Credenziali non valide",
@@ -551,31 +599,28 @@ export class AuthController {
       }
 
       const input = validation.data as EmailRequestInput;
-      console.log(`🔎 Reset password richiesto per email: ${input.email}`);
       const user = await userRepository.findByEmail(input.email);
+      // La risposta è sempre la stessa, che l'account esista o no e anche se l'invio fallisce:
+      // un 503 o un flag diverso solo per gli account esistenti rivelerebbe chi è registrato.
+      // I problemi d'invio restano visibili nei log. L'invio non viene atteso, così anche i tempi
+      // di risposta sono uguali nei due casi.
       if (user) {
-        console.log(`👤 Utente trovato per reset password: ${user.id}`);
-        const dispatchResult = await this.issuePasswordReset({ id: user.id, email: user.email, name: user.name });
-        if (!dispatchResult.sent) {
-          console.warn(`⚠️ Invio email reset non disponibile per ${input.email}: ${dispatchResult.skippedReason || "unknown"}`);
-          return reply.status(503).send({
-            success: false,
-            error: "Il servizio email non e' al momento disponibile. Riprova piu' tardi.",
-            code: "EMAIL_DELIVERY_UNAVAILABLE",
+        void this.issuePasswordReset({ id: user.id, email: user.email, name: user.name })
+          .then((dispatchResult) => {
+            if (!dispatchResult.sent) {
+              console.warn(`⚠️ Invio email reset non disponibile per utente ${user.id}: ${dispatchResult.skippedReason || "unknown"}`);
+            } else {
+              console.log(`📧 Invio reset password completato per utente ${user.id}`);
+            }
+          })
+          .catch((dispatchError) => {
+            console.error(`❌ Invio email reset fallito per utente ${user.id}:`, dispatchError);
           });
-        }
-
-        console.log(`📧 Invio reset password completato per ${input.email}`);
-      } else {
-        console.log(`ℹ️ Nessun utente trovato per reset password: ${input.email}`);
       }
 
       return reply.status(200).send({
         success: true,
         message: "Se l'account esiste, abbiamo inviato un codice per reimpostare la password",
-        data: {
-          emailDispatched: Boolean(user),
-        },
       });
     } catch (error) {
       console.error("❌ requestPasswordReset failed:", error);
