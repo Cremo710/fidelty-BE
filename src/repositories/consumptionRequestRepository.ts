@@ -5,6 +5,7 @@ import type { SignalFlag } from "../services/semaphoreService.js";
 import { platformConfigRepository } from "./platformConfigRepository.js";
 import { splitPointsEqually } from "../utils/pointsAllocation.js";
 import { DailyPointsCapError, findDailyCapViolation } from "./dailyPointsRepository.js";
+import { BAR_LIST_LIMIT, USER_HISTORY_LIMIT } from "../utils/listLimits.js";
 
 const MAX_CORRECTED_AMOUNT_RATIO = 2;
 
@@ -209,9 +210,10 @@ export class ConsumptionRequestRepository {
       FROM consumption_requests
       WHERE bar_id = $1 AND status = 'pending'
       ORDER BY created_at DESC
+      LIMIT $2
     `;
 
-    const result = await databaseService.getPool().query(query, [barId]);
+    const result = await databaseService.getPool().query(query, [barId, BAR_LIST_LIMIT]);
     return result.rows;
   }
 
@@ -224,9 +226,10 @@ export class ConsumptionRequestRepository {
         AND status = 'credited'
         AND created_at >= CURRENT_TIMESTAMP - ($2 || ' days')::interval
       ORDER BY created_at DESC
+      LIMIT $3
     `;
 
-    const result = await databaseService.getPool().query(query, [barId, limitDays]);
+    const result = await databaseService.getPool().query(query, [barId, limitDays, BAR_LIST_LIMIT]);
     return result.rows;
   }
 
@@ -246,9 +249,10 @@ export class ConsumptionRequestRepository {
         ON participant.request_id = cr.id AND participant.user_id = $1
       WHERE cr.requester_user_id = $1 OR participant.user_id = $1
       ORDER BY cr.created_at DESC
+      LIMIT $2
     `;
 
-    const result = await databaseService.getPool().query(query, [userId]);
+    const result = await databaseService.getPool().query(query, [userId, USER_HISTORY_LIMIT]);
     return result.rows;
   }
 

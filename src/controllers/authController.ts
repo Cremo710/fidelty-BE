@@ -278,7 +278,7 @@ export class AuthController {
       );
 
       if (!isPasswordValid) {
-        console.log(`⚠️  Tentativo di login con password errata: ${input.email}`);
+        console.log(`⚠️  Tentativo di login con password errata per utente ${user.id}`);
         return reply.status(401).send({
           success: false,
           error: "Credenziali non valide",
@@ -308,7 +308,7 @@ export class AuthController {
       expiresAt.setDate(expiresAt.getDate() + 7); // 7 giorni
       await userRepository.saveRefreshToken(user.id, refreshToken, expiresAt);
 
-      console.log(`✅ Login riuscito per: ${input.email}`);
+      console.log(`✅ Login riuscito per utente ${user.id}`);
 
       return reply.status(200).send({
         success: true,

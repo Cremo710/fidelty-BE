@@ -559,6 +559,7 @@ export class BusinessRequestController {
         }
 
         const client = await databaseService.getPool().connect();
+        let approved: Awaited<ReturnType<typeof businessRequestRepository.updateStatus>>;
 
         try {
           await client.query("BEGIN");
@@ -626,41 +627,42 @@ export class BusinessRequestController {
             openingHours,
           });
 
-          const updated = await businessRequestRepository.updateStatus(id, "approved", undefined, client);
+          approved = await businessRequestRepository.updateStatus(id, "approved", undefined, client);
 
           await client.query("COMMIT");
-
-          let emailResult = null;
-          if (recipientEmail) {
-            try {
-              emailResult = await emailService.sendBusinessRequestDecisionEmail({
-                recipientEmail,
-                recipientName,
-                barName: existing.bar_name,
-                businessName: existing.business_name,
-                status: "CONFIRMED",
-              });
-            } catch (emailError) {
-              console.error("❌ Errore invio email approvazione business request:", emailError);
-              emailResult = {
-                sent: false,
-                skippedReason: "send_failed",
-                recipient: recipientEmail,
-              };
-            }
-          }
-
-          return reply.send({
-            success: true,
-            data: updated,
-            email: emailResult,
-          });
         } catch (error) {
-          await client.query("ROLLBACK");
+          await client.query("ROLLBACK").catch(() => undefined);
           throw error;
         } finally {
+          // Rilasciata prima dell'invio dell'email: un invio lento non tiene occupata una connessione
           client.release();
         }
+
+        let emailResult = null;
+        if (recipientEmail) {
+          try {
+            emailResult = await emailService.sendBusinessRequestDecisionEmail({
+              recipientEmail,
+              recipientName,
+              barName: existing.bar_name,
+              businessName: existing.business_name,
+              status: "CONFIRMED",
+            });
+          } catch (emailError) {
+            console.error("❌ Errore invio email approvazione business request:", emailError);
+            emailResult = {
+              sent: false,
+              skippedReason: "send_failed",
+              recipient: recipientEmail,
+            };
+          }
+        }
+
+        return reply.send({
+          success: true,
+          data: approved,
+          email: emailResult,
+        });
       }
 
       const updated = await businessRequestRepository.updateStatus(id, "rejected", rejectionReason);

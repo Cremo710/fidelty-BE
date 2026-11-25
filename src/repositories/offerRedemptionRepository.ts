@@ -1,6 +1,7 @@
 import { ulid } from "ulid";
 import type { PoolClient } from "pg";
 import { databaseService } from "../services/databaseService.js";
+import { USER_HISTORY_LIMIT } from "../utils/listLimits.js";
 
 type Queryable = Pick<PoolClient, "query"> | ReturnType<typeof databaseService.getPool>;
 
@@ -143,8 +144,9 @@ export class OfferRedemptionRepository {
         LEFT JOIN bars b ON b.id = r.bar_id
         WHERE r.user_id = $1
         ORDER BY COALESCE(r.redeemed_at, r.frozen_at, r.created_at) DESC
+        LIMIT $2
       `,
-      [userId],
+      [userId, USER_HISTORY_LIMIT],
     );
 
     return result.rows;

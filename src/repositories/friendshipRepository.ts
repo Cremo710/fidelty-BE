@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { ulid } from "ulid";
 import { databaseService } from "../services/databaseService.js";
+import { FRIENDS_LIST_LIMIT } from "../utils/listLimits.js";
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -187,8 +188,9 @@ export class FriendshipRepository {
         JOIN utenti u ON u.id = f.friend_id
         WHERE f.user_id = $1
         ORDER BY f.created_at DESC, u.name ASC
+        LIMIT $2
       `,
-      [userId],
+      [userId, FRIENDS_LIST_LIMIT],
     );
 
     return result.rows;

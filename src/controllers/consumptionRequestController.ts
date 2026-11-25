@@ -449,8 +449,8 @@ export class ConsumptionRequestController {
       // ── OCR ────────────────────────────────────────────────────────────────
       const ocrResult = await extractReceiptFields(imageBuffer);
       const docIdCandidate = extractDocId(ocrResult.rawText);
+      // Solo metadati: niente testo dello scontrino né valori letti (dati personali e d'acquisto)
       console.log("[receipt_ocr_result]", JSON.stringify({
-        ocrResult,
         fieldsFound: {
           amount: ocrResult.amount.value !== null,
           vatNumber: ocrResult.vatNumber.value !== null,

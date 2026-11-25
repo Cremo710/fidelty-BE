@@ -430,10 +430,12 @@ async function signInWithSocialIdentityInternal(input: {
 
     await client.query("COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK");
+    // Un ROLLBACK su connessione rotta non deve nascondere l'errore originale
+    await client.query("ROLLBACK").catch(() => undefined);
     if (!isUniqueConstraintError(error)) throw error;
 
-    const linked = await pool.query<SocialUser>(
+    // Stesso client (di nuovo utilizzabile dopo il ROLLBACK): niente seconda connessione dal pool
+    const linked = await client.query<SocialUser>(
       `SELECT u.id, u.public_id, u.email, u.name
        FROM social_identities s
        JOIN utenti u ON u.id = s.user_id
